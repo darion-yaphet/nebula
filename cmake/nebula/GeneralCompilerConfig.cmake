@@ -6,7 +6,7 @@ print_config(CMAKE_CXX_STANDARD)
 print_config(CMAKE_CXX_COMPILER)
 print_config(CMAKE_CXX_COMPILER_ID)
 
-if (!CMAKE_CXX_COMPILER)
+if(NOT CMAKE_CXX_COMPILER)
     message(FATAL_ERROR "No C++ compiler found")
 endif()
 

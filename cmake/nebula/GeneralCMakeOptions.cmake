@@ -21,6 +21,7 @@ option(DISABLE_CXX11_ABI                "Whether to disable cxx11 abi" OFF)
 option(ENABLE_BREAKPAD                  "Whether to enable breakpad" OFF)
 option(ENABLE_STANDALONE_VERSION        "Enable standalone version build" OFF)
 option(ENABLE_MEMORY_TRACKER            "Enable memory tracker" ON)
+option(ENABLE_NATIVE                    "Build native client" OFF)
 
 get_cmake_property(variable_list VARIABLES)
 foreach(_varname ${variable_list})
