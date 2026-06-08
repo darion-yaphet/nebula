@@ -7,6 +7,7 @@
 
 #include "common/base/Base.h"
 #include "common/fs/TempDir.h"
+#include "meta/PasswordUtils.h"
 #include "meta/processors/parts/CreateSpaceProcessor.h"
 #include "meta/processors/parts/DropSpaceProcessor.h"
 #include "meta/processors/user/AuthenticationProcessor.h"
@@ -611,6 +612,76 @@ TEST(AuthProcessorTest, ChangePasswordTest) {
     auto resp = std::move(f).get();
     ASSERT_EQ(nebula::cpp2::ErrorCode::E_INVALID_PASSWORD, resp.get_code());
   }
+}
+
+// Verify that password storage uses SHA-256+salt and never stores the raw input.
+TEST(AuthProcessorTest, PasswordStoredAsSha256NotPlaintext) {
+  fs::TempDir rootPath("/tmp/PasswordStorageSecurityTest.XXXXXX");
+  std::unique_ptr<kvstore::KVStore> kv(MockCluster::initMetaKV(rootPath.path()));
+
+  const std::string rawPwd = "mysecretpassword";
+  {
+    cpp2::CreateUserReq req;
+    req.if_not_exists_ref() = false;
+    req.account_ref() = "secuser";
+    req.encoded_pwd_ref() = rawPwd;
+    auto* processor = CreateUserProcessor::instance(kv.get());
+    auto f = processor->getFuture();
+    processor->process(req);
+    auto resp = std::move(f).get();
+    ASSERT_EQ(nebula::cpp2::ErrorCode::SUCCEEDED, resp.get_code());
+  }
+
+  std::string storedVal;
+  auto retCode =
+      kv->get(kDefaultSpaceId, kDefaultPartId, MetaKeyUtils::userKey("secuser"), &storedVal);
+  ASSERT_EQ(nebula::cpp2::ErrorCode::SUCCEEDED, retCode);
+
+  auto storedPwd = MetaKeyUtils::parseUserPwd(storedVal);
+  // Raw input must not appear verbatim in stored value.
+  ASSERT_NE(storedPwd, rawPwd) << "password must not be stored as plaintext";
+  // Stored value must use the new SHA-256+salt format.
+  ASSERT_EQ(storedPwd.substr(0, 8), "$sha256$") << "stored password must have $sha256$ prefix";
+  // verifyPassword must accept the original input.
+  ASSERT_TRUE(PasswordUtils::verifyPassword(rawPwd, storedPwd));
+  // verifyPassword must reject a wrong input.
+  ASSERT_FALSE(PasswordUtils::verifyPassword("wrongpassword", storedPwd));
+}
+
+// Verify that ChangePassword properly re-hashes the new password.
+TEST(AuthProcessorTest, ChangePasswordStoresNewHashNotPlaintext) {
+  fs::TempDir rootPath("/tmp/ChangePasswordSecurityTest.XXXXXX");
+  std::unique_ptr<kvstore::KVStore> kv(MockCluster::initMetaKV(rootPath.path()));
+
+  {
+    cpp2::CreateUserReq req;
+    req.if_not_exists_ref() = false;
+    req.account_ref() = "user1";
+    req.encoded_pwd_ref() = "oldpwd";
+    auto* processor = CreateUserProcessor::instance(kv.get());
+    auto f = processor->getFuture();
+    processor->process(req);
+    std::move(f).get();
+  }
+  {
+    cpp2::ChangePasswordReq req;
+    req.account_ref() = "user1";
+    req.old_encoded_pwd_ref() = "oldpwd";
+    req.new_encoded_pwd_ref() = "newpwd";
+    auto* processor = ChangePasswordProcessor::instance(kv.get());
+    auto f = processor->getFuture();
+    processor->process(req);
+    auto resp = std::move(f).get();
+    ASSERT_EQ(nebula::cpp2::ErrorCode::SUCCEEDED, resp.get_code());
+  }
+
+  std::string storedVal;
+  kv->get(kDefaultSpaceId, kDefaultPartId, MetaKeyUtils::userKey("user1"), &storedVal);
+  auto storedPwd = MetaKeyUtils::parseUserPwd(storedVal);
+
+  ASSERT_EQ(storedPwd.substr(0, 8), "$sha256$");
+  ASSERT_TRUE(PasswordUtils::verifyPassword("newpwd", storedPwd));
+  ASSERT_FALSE(PasswordUtils::verifyPassword("oldpwd", storedPwd));
 }
 
 }  // namespace meta

@@ -7,6 +7,7 @@
 #define META_PROCESSORS_BASEPROCESSOR_INL_H
 
 #include "interface/gen-cpp2/storage_types.h"
+#include "meta/PasswordUtils.h"
 #include "meta/processors/BaseProcessor.h"
 
 namespace nebula {
@@ -391,7 +392,8 @@ ErrorOr<nebula::cpp2::ErrorCode, bool> BaseProcessor<RESP>::checkPassword(
   auto userKey = MetaKeyUtils::userKey(account);
   auto ret = doGet(userKey);
   if (nebula::ok(ret)) {
-    return MetaKeyUtils::parseUserPwd(nebula::value(ret)) == password;
+    const auto& stored = MetaKeyUtils::parseUserPwd(nebula::value(ret));
+    return PasswordUtils::verifyPassword(password, stored);
   }
   return nebula::error(ret);
 }

@@ -318,3 +318,20 @@ nebula_add_test(
         gtest
         curl
 )
+
+nebula_add_test(
+    NAME
+        password_utils_test
+    SOURCES
+        PasswordUtilsTest.cpp
+    OBJECTS
+        ${meta_test_deps}
+    LIBRARIES
+        ${ROCKSDB_LIBRARIES}
+        ${THRIFT_LIBRARIES}
+        ${PROXYGEN_LIBRARIES}
+        ${OPENSSL_CRYPTO_LIBRARY}
+        wangle
+        gtest
+        curl
+)

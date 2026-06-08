@@ -6,12 +6,11 @@
 #ifndef META_ROOTUSERMAN_H_
 #define META_ROOTUSERMAN_H_
 
-#include <proxygen/lib/utils/CryptUtil.h>
-
 #include "common/base/Base.h"
 #include "common/utils/MetaKeyUtils.h"
 #include "interface/gen-cpp2/common_types.h"
 #include "kvstore/KVStore.h"
+#include "meta/PasswordUtils.h"
 
 namespace nebula {
 namespace meta {
@@ -56,7 +55,9 @@ class RootUserMan {
 
   static nebula::cpp2::ErrorCode initRootUser(kvstore::KVStore* kv) {
     LOG(INFO) << "Init root user";
-    auto encodedPwd = proxygen::md5Encode(folly::StringPiece("nebula"));
+    // Default password "nebula" is hashed with SHA-256 + random salt.
+    // The stored format is $sha256$<salt>$<hash> — never raw MD5.
+    auto encodedPwd = PasswordUtils::hashPassword("nebula");
     auto userKey = MetaKeyUtils::userKey("root");
     auto userVal = MetaKeyUtils::userVal(std::move(encodedPwd));
     auto roleKey = MetaKeyUtils::roleKey(kDefaultSpaceId, "root");

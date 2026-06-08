@@ -8,6 +8,7 @@
 #include <thrift/lib/cpp/util/EnumUtils.h>
 
 #include "kvstore/LogEncoder.h"
+#include "meta/PasswordUtils.h"
 
 namespace nebula {
 namespace meta {
@@ -35,7 +36,8 @@ void CreateUserProcessor::process(const cpp2::CreateUserReq& req) {
 
   LOG(INFO) << "Create User " << account;
   std::vector<kvstore::KV> data;
-  data.emplace_back(MetaKeyUtils::userKey(account), MetaKeyUtils::userVal(password));
+  data.emplace_back(MetaKeyUtils::userKey(account),
+                    MetaKeyUtils::userVal(PasswordUtils::hashPassword(password)));
   auto timeInMilliSec = time::WallClock::fastNowInMilliSec();
   LastUpdateTimeMan::update(data, timeInMilliSec);
   auto ret = doSyncPut(std::move(data));
@@ -48,7 +50,6 @@ void AlterUserProcessor::process(const cpp2::AlterUserReq& req) {
   const auto& account = req.get_account();
   const auto& password = req.get_encoded_pwd();
   auto userKey = MetaKeyUtils::userKey(account);
-  auto userVal = MetaKeyUtils::userVal(password);
 
   auto iRet = doGet(userKey);
   if (!nebula::ok(iRet)) {
@@ -65,7 +66,8 @@ void AlterUserProcessor::process(const cpp2::AlterUserReq& req) {
 
   LOG(INFO) << "Alter User " << account;
   std::vector<kvstore::KV> data;
-  data.emplace_back(std::move(userKey), std::move(userVal));
+  data.emplace_back(std::move(userKey),
+                    MetaKeyUtils::userVal(PasswordUtils::hashPassword(password)));
   auto timeInMilliSec = time::WallClock::fastNowInMilliSec();
   LastUpdateTimeMan::update(data, timeInMilliSec);
   auto ret = doSyncPut(std::move(data));
@@ -249,9 +251,9 @@ void ChangePasswordProcessor::process(const cpp2::ChangePasswordReq& req) {
 
   LOG(INFO) << "Change password for user " << account;
   auto userKey = MetaKeyUtils::userKey(account);
-  auto userVal = MetaKeyUtils::userVal(req.get_new_encoded_pwd());
   std::vector<kvstore::KV> data;
-  data.emplace_back(std::move(userKey), std::move(userVal));
+  data.emplace_back(std::move(userKey),
+                    MetaKeyUtils::userVal(PasswordUtils::hashPassword(req.get_new_encoded_pwd())));
   auto timeInMilliSec = time::WallClock::fastNowInMilliSec();
   LastUpdateTimeMan::update(data, timeInMilliSec);
   auto ret = doSyncPut(std::move(data));
