@@ -5,7 +5,13 @@
 
 
 # Used to package into deb or RPM files
-macro(package to_one name home_page scripts_dir)
+# Named args: PACK_ONE NAME HOME_PAGE SCRIPTS_DIR
+macro(package)
+    cmake_parse_arguments(PKG "" "PACK_ONE;NAME;HOME_PAGE;SCRIPTS_DIR" "" ${ARGN})
+    set(to_one      ${PKG_PACK_ONE})
+    set(name        ${PKG_NAME})
+    set(home_page   ${PKG_HOME_PAGE})
+    set(scripts_dir ${PKG_SCRIPTS_DIR})
     set(CPACK_PACKAGE_DESCRIPTION ${name})
     set(CPACK_PACKAGE_CONTACT ${name})
     set(CPACK_PACKAGE_VERSION ${NEBULA_BUILD_VERSION})
@@ -123,7 +129,6 @@ macro(package to_one name home_page scripts_dir)
             endif()
         endif()
         string(CONCAT HOST_SYSTEM_VER ${HOST_SYSTEM_NAME} ${HOST_SYSTEM_VER})
-        set(CMAKE_HOST_SYSTEM_PROCESSOR "mips64el")
     else()
         set(HOST_SYSTEM_VER "Unknown")
     endif()

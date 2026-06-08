@@ -18,7 +18,7 @@
 #   ENABLE_PACK_ONE                -- Package to one or multi packages
 
 # CMake version check
-cmake_minimum_required(VERSION 3.9.0)
+cmake_minimum_required(VERSION 3.16...3.28)
 
 # Set the project name
 project("Nebula Graph" C CXX)
@@ -30,10 +30,10 @@ option(ENABLE_PACKAGE_TAR "Enable package artifacts to tar." OFF)
 option(ENABLE_CREATE_GIT_HOOKS "Enable create git hooks." ON)
 option(ENABLE_INCLUDE_WHAT_YOU_USE "Enable include-what-you-use find  nouse include files" OFF)
 
-add_definitions(-DNEBULA_HOME=${CMAKE_SOURCE_DIR})
+add_compile_definitions(NEBULA_HOME="${CMAKE_SOURCE_DIR}")
 
 if(ENABLE_STANDALONE_VERSION)
-    add_definitions(-DBUILD_STANDALONE)
+    add_compile_definitions(BUILD_STANDALONE)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
@@ -54,11 +54,16 @@ include(NebulaCustomTargets)
 include(IncludeWhatYouUse)
 include(TimeTrace)
 
-add_custom_target(
-  clang-format
-  COMMAND "find" "src/" "-type" "f" "\\(" "-iname" "\\*.h" "-o" "-iname" "\\*.cpp" "\\)" "|" "xargs" "clang-format" "-i"
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-)
+find_program(CLANG_FORMAT_EXECUTABLE clang-format)
+if(CLANG_FORMAT_EXECUTABLE)
+    add_custom_target(
+        clang-format
+        COMMAND bash -c "find src/ -type f \\( -iname '*.h' -o -iname '*.cpp' \\) | xargs ${CLANG_FORMAT_EXECUTABLE} -i"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-format"
+        VERBATIM
+    )
+endif()
 
 if (ENABLE_NATIVE)
     message(STATUS "ENABLE_NATIVE is ${ENABLE_NATIVE}")
@@ -77,17 +82,14 @@ if(ENABLE_MEMORY_TRACKER)
         message(FATAL_ERROR "MemoryTracker need -DENABLE_JEMALLOC=on")
     endif()
 else()
-    message(WARNING "MemoryTracker is DISABLED")
+    message(STATUS "MemoryTracker is DISABLED")
 endif()
-
-include_directories(AFTER ${CMAKE_SOURCE_DIR}/src)
-include_directories(AFTER ${CMAKE_CURRENT_BINARY_DIR}/src)
 
 # For simplicity, we make all ordinary libraries depend on the compile-time generated files,
 # including the precompiled header, a.k.a Base.h.gch, and thrift headers.
-macro(nebula_add_library name type)
+function(nebula_add_library name type)
     add_library(${name} ${type} ${ARGN})
-    if (PCHSupport_FOUND)
+    if(PCHSupport_FOUND)
         add_dependencies(
             ${name}
             base_obj_gch
@@ -105,7 +107,7 @@ macro(nebula_add_library name type)
         wkt_parser_target
         datetime_parser_target
     )
-endmacro()
+endfunction()
 
 nebula_add_subdirectory(src)
 nebula_add_subdirectory(conf)
@@ -114,8 +116,8 @@ nebula_add_subdirectory(scripts)
 
 include(CPackage)
 package(
-  ${ENABLE_PACK_ONE}
-  "nebula-graph"
-  "https://github.com/vesoft-inc/nebula/releases"
-  ${CMAKE_SOURCE_DIR}/package
+  PACK_ONE    ${ENABLE_PACK_ONE}
+  NAME        "nebula-graph"
+  HOME_PAGE   "https://github.com/vesoft-inc/nebula/releases"
+  SCRIPTS_DIR ${CMAKE_SOURCE_DIR}/package
 )
