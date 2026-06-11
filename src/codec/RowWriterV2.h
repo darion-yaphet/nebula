@@ -234,6 +234,12 @@ class RowWriterV2 {
   WriteResult checkUnsetFields();
   std::string processOutOfSpace();
 
+  // Returns the byte size of serialized list/set payload in buf starting at
+  // dataOffset: 4-byte count header + all item bytes.
+  static size_t containerDataSize(const std::string& buf,
+                                  int32_t dataOffset,
+                                  nebula::cpp2::PropertyType type);
+
   void processV2EncodedStr();
 
   void setNullBit(ssize_t pos);
