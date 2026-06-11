@@ -725,41 +725,54 @@ folly::SemiFuture<StorageRpcResponse<cpp2::ExecResponse>> StorageClient::remove(
       });
 }
 
-StatusOr<std::function<const VertexID&(const Row&)>> StorageClient::getIdFromRow(
-    GraphSpaceID space, bool isEdgeProps) const {
+namespace {
+
+// Nebula encodes an INT64 vid as its raw in-memory 8-byte image. The storage
+// side decodes it the same way, so this byte layout is part of the wire format
+// (it assumes both ends share the same endianness; changing it would be a
+// wire-format change requiring a coordinated storage-side update).
+std::string encodeIntVid(int64_t vid) {
+  return std::string(reinterpret_cast<const char*>(&vid), sizeof(int64_t));
+}
+
+// Rewrite an INT64 vid value in place into its binary string form. Idempotent:
+// a value that is already a string is left untouched, so calling it twice is
+// safe.
+void toBinaryVid(Value& v) {
+  if (v.type() == Value::Type::INT) {
+    v = Value(encodeIntVid(v.getInt()));
+  }
+}
+
+}  // namespace
+
+StatusOr<std::function<const VertexID&(Row&)>> StorageClient::getIdFromRow(GraphSpaceID space,
+                                                                          bool isEdgeProps) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
     return vidTypeStatus.status();
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const Row&)> cb;
+  std::function<const VertexID&(Row&)> cb;
   if (vidType == PropertyType::INT64) {
     if (isEdgeProps) {
-      cb = [](const Row& r) -> const VertexID& {
+      cb = [](Row& r) -> const VertexID& {
         // The first column has to be the src, the third column has to be the
         // dst
-        DCHECK_EQ(Value::Type::INT, r.values[0].type());
-        DCHECK_EQ(Value::Type::INT, r.values[3].type());
-        auto& mutableR = const_cast<Row&>(r);
-        mutableR.values[0] =
-            Value(std::string(reinterpret_cast<const char*>(&r.values[0].getInt()), 8));
-        mutableR.values[3] =
-            Value(std::string(reinterpret_cast<const char*>(&r.values[3].getInt()), 8));
-        return mutableR.values[0].getStr();
+        toBinaryVid(r.values[0]);
+        toBinaryVid(r.values[3]);
+        return r.values[0].getStr();
       };
     } else {
-      cb = [](const Row& r) -> const VertexID& {
+      cb = [](Row& r) -> const VertexID& {
         // The first column has to be the vid
-        DCHECK_EQ(Value::Type::INT, r.values[0].type());
-        auto& mutableR = const_cast<Row&>(r);
-        mutableR.values[0] =
-            Value(std::string(reinterpret_cast<const char*>(&r.values[0].getInt()), 8));
-        return mutableR.values[0].getStr();
+        toBinaryVid(r.values[0]);
+        return r.values[0].getStr();
       };
     }
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const Row& r) -> const VertexID& {
+    cb = [](Row& r) -> const VertexID& {
       // The first column has to be the vid
       DCHECK_EQ(Value::Type::STRING, r.values[0].type());
       return r.values[0].getStr();
@@ -771,7 +784,7 @@ StatusOr<std::function<const VertexID&(const Row&)>> StorageClient::getIdFromRow
   return cb;
 }
 
-StatusOr<std::function<const VertexID&(const cpp2::NewVertex&)>> StorageClient::getIdFromNewVertex(
+StatusOr<std::function<const VertexID&(cpp2::NewVertex&)>> StorageClient::getIdFromNewVertex(
     GraphSpaceID space) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
@@ -779,17 +792,14 @@ StatusOr<std::function<const VertexID&(const cpp2::NewVertex&)>> StorageClient::
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const cpp2::NewVertex&)> cb;
+  std::function<const VertexID&(cpp2::NewVertex&)> cb;
   if (vidType == PropertyType::INT64) {
-    cb = [](const cpp2::NewVertex& v) -> const VertexID& {
-      DCHECK_EQ(Value::Type::INT, v.get_id().type());
-      auto& mutableV = const_cast<cpp2::NewVertex&>(v);
-      mutableV.id_ref() =
-          Value(std::string(reinterpret_cast<const char*>(&v.get_id().getInt()), 8));
-      return mutableV.get_id().getStr();
+    cb = [](cpp2::NewVertex& v) -> const VertexID& {
+      toBinaryVid(*v.id_ref());
+      return v.get_id().getStr();
     };
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const cpp2::NewVertex& v) -> const VertexID& {
+    cb = [](cpp2::NewVertex& v) -> const VertexID& {
       DCHECK_EQ(Value::Type::STRING, v.get_id().type());
       return v.get_id().getStr();
     };
@@ -799,7 +809,7 @@ StatusOr<std::function<const VertexID&(const cpp2::NewVertex&)>> StorageClient::
   return cb;
 }
 
-StatusOr<std::function<const VertexID&(const cpp2::NewEdge&)>> StorageClient::getIdFromNewEdge(
+StatusOr<std::function<const VertexID&(cpp2::NewEdge&)>> StorageClient::getIdFromNewEdge(
     GraphSpaceID space) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
@@ -807,24 +817,16 @@ StatusOr<std::function<const VertexID&(const cpp2::NewEdge&)>> StorageClient::ge
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const cpp2::NewEdge&)> cb;
+  std::function<const VertexID&(cpp2::NewEdge&)> cb;
   if (vidType == PropertyType::INT64) {
-    cb = [](const cpp2::NewEdge& e) -> const VertexID& {
-      DCHECK_EQ(Value::Type::INT, e.get_key().get_src().type());
-      DCHECK_EQ(Value::Type::INT, e.get_key().get_dst().type());
-      auto& mutableE = const_cast<cpp2::NewEdge&>(e);
-      (*mutableE.key_ref())
-          .src_ref()
-          .emplace(Value(
-              std::string(reinterpret_cast<const char*>(&e.get_key().get_src().getInt()), 8)));
-      (*mutableE.key_ref())
-          .dst_ref()
-          .emplace(Value(
-              std::string(reinterpret_cast<const char*>(&e.get_key().get_dst().getInt()), 8)));
-      return mutableE.get_key().get_src().getStr();
+    cb = [](cpp2::NewEdge& e) -> const VertexID& {
+      auto& key = *e.key_ref();
+      toBinaryVid(*key.src_ref());
+      toBinaryVid(*key.dst_ref());
+      return key.get_src().getStr();
     };
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const cpp2::NewEdge& e) -> const VertexID& {
+    cb = [](cpp2::NewEdge& e) -> const VertexID& {
       DCHECK_EQ(Value::Type::STRING, e.get_key().get_src().type());
       DCHECK_EQ(Value::Type::STRING, e.get_key().get_dst().type());
       return e.get_key().get_src().getStr();
@@ -835,7 +837,7 @@ StatusOr<std::function<const VertexID&(const cpp2::NewEdge&)>> StorageClient::ge
   return cb;
 }
 
-StatusOr<std::function<const VertexID&(const cpp2::EdgeKey&)>> StorageClient::getIdFromEdgeKey(
+StatusOr<std::function<const VertexID&(cpp2::EdgeKey&)>> StorageClient::getIdFromEdgeKey(
     GraphSpaceID space) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
@@ -843,20 +845,15 @@ StatusOr<std::function<const VertexID&(const cpp2::EdgeKey&)>> StorageClient::ge
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const cpp2::EdgeKey&)> cb;
+  std::function<const VertexID&(cpp2::EdgeKey&)> cb;
   if (vidType == PropertyType::INT64) {
-    cb = [](const cpp2::EdgeKey& eKey) -> const VertexID& {
-      DCHECK_EQ(Value::Type::INT, eKey.get_src().type());
-      DCHECK_EQ(Value::Type::INT, eKey.get_dst().type());
-      auto& mutableEK = const_cast<cpp2::EdgeKey&>(eKey);
-      mutableEK.src_ref() =
-          Value(std::string(reinterpret_cast<const char*>(&eKey.get_src().getInt()), 8));
-      mutableEK.dst_ref() =
-          Value(std::string(reinterpret_cast<const char*>(&eKey.get_dst().getInt()), 8));
-      return mutableEK.get_src().getStr();
+    cb = [](cpp2::EdgeKey& eKey) -> const VertexID& {
+      toBinaryVid(*eKey.src_ref());
+      toBinaryVid(*eKey.dst_ref());
+      return eKey.get_src().getStr();
     };
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const cpp2::EdgeKey& eKey) -> const VertexID& {
+    cb = [](cpp2::EdgeKey& eKey) -> const VertexID& {
       DCHECK_EQ(Value::Type::STRING, eKey.get_src().type());
       DCHECK_EQ(Value::Type::STRING, eKey.get_dst().type());
       return eKey.get_src().getStr();
@@ -867,7 +864,7 @@ StatusOr<std::function<const VertexID&(const cpp2::EdgeKey&)>> StorageClient::ge
   return cb;
 }
 
-StatusOr<std::function<const VertexID&(const Value&)>> StorageClient::getIdFromValue(
+StatusOr<std::function<const VertexID&(Value&)>> StorageClient::getIdFromValue(
     GraphSpaceID space) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
@@ -875,16 +872,14 @@ StatusOr<std::function<const VertexID&(const Value&)>> StorageClient::getIdFromV
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const Value&)> cb;
+  std::function<const VertexID&(Value&)> cb;
   if (vidType == PropertyType::INT64) {
-    cb = [](const Value& v) -> const VertexID& {
-      DCHECK_EQ(Value::Type::INT, v.type());
-      auto& mutableV = const_cast<Value&>(v);
-      mutableV = Value(std::string(reinterpret_cast<const char*>(&v.getInt()), 8));
-      return mutableV.getStr();
+    cb = [](Value& v) -> const VertexID& {
+      toBinaryVid(v);
+      return v.getStr();
     };
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const Value& v) -> const VertexID& {
+    cb = [](Value& v) -> const VertexID& {
       DCHECK_EQ(Value::Type::STRING, v.type());
       return v.getStr();
     };
@@ -894,7 +889,7 @@ StatusOr<std::function<const VertexID&(const Value&)>> StorageClient::getIdFromV
   return cb;
 }
 
-StatusOr<std::function<const VertexID&(const cpp2::DelTags&)>> StorageClient::getIdFromDelTags(
+StatusOr<std::function<const VertexID&(cpp2::DelTags&)>> StorageClient::getIdFromDelTags(
     GraphSpaceID space) const {
   auto vidTypeStatus = metaClient_->getSpaceVidType(space);
   if (!vidTypeStatus) {
@@ -902,20 +897,16 @@ StatusOr<std::function<const VertexID&(const cpp2::DelTags&)>> StorageClient::ge
   }
   auto vidType = std::move(vidTypeStatus).value();
 
-  std::function<const VertexID&(const cpp2::DelTags&)> cb;
+  std::function<const VertexID&(cpp2::DelTags&)> cb;
   if (vidType == PropertyType::INT64) {
-    cb = [](const cpp2::DelTags& delTags) -> const VertexID& {
-      const auto& vId = delTags.get_id();
-      DCHECK_EQ(Value::Type::INT, vId.type());
-      auto& mutableV = const_cast<Value&>(vId);
-      mutableV = Value(std::string(reinterpret_cast<const char*>(&vId.getInt()), 8));
-      return mutableV.getStr();
+    cb = [](cpp2::DelTags& delTags) -> const VertexID& {
+      toBinaryVid(*delTags.id_ref());
+      return delTags.get_id().getStr();
     };
   } else if (vidType == PropertyType::FIXED_STRING) {
-    cb = [](const cpp2::DelTags& delTags) -> const VertexID& {
-      const auto& vId = delTags.get_id();
-      DCHECK_EQ(Value::Type::STRING, vId.type());
-      return vId.getStr();
+    cb = [](cpp2::DelTags& delTags) -> const VertexID& {
+      DCHECK_EQ(Value::Type::STRING, delTags.get_id().type());
+      return delTags.get_id().getStr();
     };
   } else {
     return Status::Error("Only support integer/string type vid.");

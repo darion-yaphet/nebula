@@ -143,11 +143,13 @@ class StorageClientBase {
   // The method returns a map
   //  host_addr (A host, but in most case, the leader will be chosen)
   //      => (partition -> [ids that belong to the shard])
+  // `ids` is taken by value: each element is mutated by `f` (e.g. an INT64 vid
+  // is rewritten into its binary string form) and then moved into the result.
   template <class Container, class GetIdFunc>
   StatusOr<std::unordered_map<
       HostAddr,
       std::unordered_map<PartitionID, std::vector<typename Container::value_type>>>>
-  clusterIdsToHosts(GraphSpaceID spaceId, const Container& ids, GetIdFunc f) const;
+  clusterIdsToHosts(GraphSpaceID spaceId, Container ids, GetIdFunc f) const;
 
   StatusOr<std::unordered_map<HostAddr, std::unordered_map<PartitionID, cpp2::ScanCursor>>>
   getHostPartsWithCursor(GraphSpaceID spaceId) const;

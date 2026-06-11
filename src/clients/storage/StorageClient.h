@@ -177,21 +177,24 @@ class StorageClient
                                                                    folly::EventBase* evb = nullptr);
 
  private:
-  StatusOr<std::function<const VertexID&(const Row&)>> getIdFromRow(GraphSpaceID space,
-                                                                    bool isEdgeProps) const;
+  // The returned callable converts an INT64 vid in-place into its binary
+  // string form (no-op when the vid is already a string) and returns a
+  // reference to it, so the parameter is taken by mutable reference.
+  StatusOr<std::function<const VertexID&(Row&)>> getIdFromRow(GraphSpaceID space,
+                                                              bool isEdgeProps) const;
 
-  StatusOr<std::function<const VertexID&(const cpp2::NewVertex&)>> getIdFromNewVertex(
+  StatusOr<std::function<const VertexID&(cpp2::NewVertex&)>> getIdFromNewVertex(
       GraphSpaceID space) const;
 
-  StatusOr<std::function<const VertexID&(const cpp2::NewEdge&)>> getIdFromNewEdge(
+  StatusOr<std::function<const VertexID&(cpp2::NewEdge&)>> getIdFromNewEdge(
       GraphSpaceID space) const;
 
-  StatusOr<std::function<const VertexID&(const cpp2::EdgeKey&)>> getIdFromEdgeKey(
+  StatusOr<std::function<const VertexID&(cpp2::EdgeKey&)>> getIdFromEdgeKey(
       GraphSpaceID space) const;
 
-  StatusOr<std::function<const VertexID&(const Value&)>> getIdFromValue(GraphSpaceID space) const;
+  StatusOr<std::function<const VertexID&(Value&)>> getIdFromValue(GraphSpaceID space) const;
 
-  StatusOr<std::function<const VertexID&(const cpp2::DelTags&)>> getIdFromDelTags(
+  StatusOr<std::function<const VertexID&(cpp2::DelTags&)>> getIdFromDelTags(
       GraphSpaceID space) const;
 };
 

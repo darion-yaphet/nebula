@@ -242,7 +242,7 @@ StatusOr<std::unordered_map<
     HostAddr,
     std::unordered_map<PartitionID, std::vector<typename Container::value_type>>>>
 StorageClientBase<ClientType, ClientManagerType>::clusterIdsToHosts(GraphSpaceID spaceId,
-                                                                    const Container& ids,
+                                                                    Container ids,
                                                                     GetIdFunc f) const {
   std::unordered_map<HostAddr,
                      std::unordered_map<PartitionID, std::vector<typename Container::value_type>>>
