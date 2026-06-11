@@ -160,7 +160,14 @@ Value RowReaderV2::getValueByIndex(const int64_t index) const {
       if (static_cast<size_t>(strOffset) == data_.size() && strLen == 0) {
         return std::string();
       }
-      CHECK_LT(strOffset, data_.size());
+      // Corrupt data must not crash the reader: validate the slice lies fully
+      // within data_, consistent with the LIST/SET read paths below.
+      if (strOffset < 0 || strLen < 0 ||
+          static_cast<size_t>(strOffset) + static_cast<size_t>(strLen) > data_.size()) {
+        LOG(ERROR) << "String out of bounds. Offset: " << strOffset << ", Len: " << strLen
+                   << ", Data size: " << data_.size();
+        return Value::kNullValue;
+      }
       return std::string(&data_[strOffset], strLen);
     }
     case PropertyType::FIXED_STRING: {
@@ -232,7 +239,14 @@ Value RowReaderV2::getValueByIndex(const int64_t index) const {
       if (static_cast<size_t>(strOffset) == data_.size() && strLen == 0) {
         return Value::kEmpty;  // Is it ok to return Value::kEmpty?
       }
-      CHECK_LT(strOffset, data_.size());
+      // Corrupt data must not crash the reader: validate the slice lies fully
+      // within data_, consistent with the LIST/SET read paths below.
+      if (strOffset < 0 || strLen < 0 ||
+          static_cast<size_t>(strOffset) + static_cast<size_t>(strLen) > data_.size()) {
+        LOG(ERROR) << "Geography WKB out of bounds. Offset: " << strOffset << ", Len: " << strLen
+                   << ", Data size: " << data_.size();
+        return Value::kNullBadData;
+      }
       auto wkb = std::string(&data_[strOffset], strLen);
       // Parse a geography from the wkb, normalize it and then verify its validity.
       auto geogRet = Geography::fromWKB(wkb, true, true);
