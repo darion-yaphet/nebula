@@ -19,8 +19,8 @@ intToBool(IntType iVal) {
 }
 
 inline bool strToBool(folly::StringPiece str) {
-  return str == "Y" || str == "y" || str == "T" || str == "t" || str == "yes" || str == "Yes" ||
-         str == "YES" || str == "true" || str == "True" || str == "TRUE";
+  return str == "Y" || str == "y" || str == "T" || str == "t" || str == "1" || str == "yes" ||
+         str == "Yes" || str == "YES" || str == "true" || str == "True" || str == "TRUE";
 }
 
 inline std::string toHexStr(folly::StringPiece str) {
