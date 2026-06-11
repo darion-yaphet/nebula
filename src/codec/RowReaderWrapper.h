@@ -17,7 +17,7 @@
 namespace nebula {
 
 /**
- * @brief A wrapper class to hide details of RowReaderV1 and RowReaderV2
+ * @brief A wrapper class providing a unified interface over RowReaderV2
  */
 class RowReaderWrapper {
   FRIEND_TEST(RowReaderV2, encodedData);
