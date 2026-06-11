@@ -141,22 +141,15 @@ void RowReaderWrapper::getVersions(const folly::StringPiece& row,
 
   readerVer = ((row[index] & 0x18) >> 3) + 1;
 
-  size_t verBytes = 0;
-  if (readerVer == 1) {
-    // The first three bits indicate the number of bytes for the
-    // schema version. If the number is zero, no schema version
-    // presents
-    verBytes = row[index++] >> 5;
-  } else if (readerVer == 2) {
-    // The last three bits indicate the number of bytes for the
-    // schema version. If the number is zero, no schema version
-    // presents
-    verBytes = row[index++] & 0x07;
-  } else {
+  if (readerVer != 2) {
     LOG(WARNING) << "Invalid reader version: " << readerVer;
     schemaVer = -1;
     return;
   }
+
+  // The last three bits indicate the number of bytes for the schema version.
+  // If the number is zero, no schema version is present.
+  size_t verBytes = row[index++] & 0x07;
 
   schemaVer = 0;
   if (verBytes > 0) {
