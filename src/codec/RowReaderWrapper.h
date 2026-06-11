@@ -36,7 +36,8 @@ class RowReaderWrapper {
    */
   RowReaderWrapper(RowReaderWrapper&& rhs) {
     this->readerV2_ = std::move(rhs.readerV2_);
-    this->currReader_ = &(this->readerV2_);
+    this->valid_ = rhs.valid_;
+    rhs.valid_ = false;
   }
 
   /**
@@ -47,7 +48,8 @@ class RowReaderWrapper {
    */
   RowReaderWrapper& operator=(RowReaderWrapper&& rhs) {
     this->readerV2_ = std::move(rhs.readerV2_);
-    this->currReader_ = &(this->readerV2_);
+    this->valid_ = rhs.valid_;
+    rhs.valid_ = false;
     return *this;
   }
 
@@ -144,44 +146,44 @@ class RowReaderWrapper {
              folly::StringPiece row);
 
   Value getValueByName(const std::string& prop) const {
-    DCHECK(!!currReader_);
-    return currReader_->getValueByName(prop);
+    DCHECK(valid_);
+    return readerV2_.getValueByName(prop);
   }
 
   Value getValueByIndex(const int64_t index) const {
-    DCHECK(!!currReader_);
-    return currReader_->getValueByIndex(index);
+    DCHECK(valid_);
+    return readerV2_.getValueByIndex(index);
   }
 
   int64_t getTimestamp() const noexcept {
-    DCHECK(!!currReader_);
-    return currReader_->getTimestamp();
+    DCHECK(valid_);
+    return readerV2_.getTimestamp();
   }
 
   // Return the number of bytes used for the header info
   size_t headerLen() const noexcept {
-    DCHECK(!!currReader_);
-    return currReader_->headerLen();
+    DCHECK(valid_);
+    return readerV2_.headerLen();
   }
 
   SchemaVer schemaVer() const noexcept {
-    DCHECK(!!currReader_);
-    return currReader_->schemaVer();
+    DCHECK(valid_);
+    return readerV2_.schemaVer();
   }
 
   size_t numFields() const noexcept {
-    DCHECK(!!currReader_);
-    return currReader_->numFields();
+    DCHECK(valid_);
+    return readerV2_.numFields();
   }
 
   const meta::NebulaSchemaProvider* getSchema() const {
-    DCHECK(!!currReader_);
-    return currReader_->getSchema();
+    DCHECK(valid_);
+    return readerV2_.getSchema();
   }
 
   const std::string getData() const {
-    DCHECK(!!currReader_);
-    return currReader_->getData();
+    DCHECK(valid_);
+    return readerV2_.getData();
   }
 
   /**
@@ -211,47 +213,39 @@ class RowReaderWrapper {
    * @brief Return whether wrapper points to a valid data
    */
   bool operator!=(std::nullptr_t) const noexcept {
-    return currReader_ != nullptr;
+    return valid_;
   }
 
   /**
-   * @brief Return this row reader wrapper
+   * @brief Pointer-like access — returns the wrapper itself.
+   * Callers may use wrapper->method() as a drop-in for wrapper.method().
    */
   RowReaderWrapper* operator->() const noexcept {
     return get();
   }
 
-  /**
-   * @brief Return this row reader wrapper
-   */
   RowReaderWrapper* get() const noexcept {
     return const_cast<RowReaderWrapper*>(this);
   }
 
-  /**
-   * @brief Return this row reader wrapper
-   */
   RowReaderWrapper* get() noexcept {
     return this;
   }
 
-  /**
-   * @brief Return this row reader wrapper
-   */
   RowReaderWrapper& operator*() const noexcept {
     return *get();
   }
 
   /**
-   * @brief Reset to an empty row reader
+   * @brief Reset to an empty (invalid) row reader
    */
   void reset() noexcept {
-    currReader_ = nullptr;
+    valid_ = false;
   }
 
  private:
   RowReaderV2 readerV2_;
-  RowReaderV2* currReader_ = nullptr;
+  bool valid_ = false;
 };
 
 }  // namespace nebula
