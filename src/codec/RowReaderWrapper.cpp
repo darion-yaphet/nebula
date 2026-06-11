@@ -12,6 +12,10 @@ RowReaderWrapper RowReaderWrapper::getTagPropReader(meta::SchemaManager* schemaM
                                                     GraphSpaceID space,
                                                     TagID tag,
                                                     folly::StringPiece row) {
+  if (schemaMan == nullptr) {
+    LOG(ERROR) << "schemaMan should not be nullptr!";
+    return RowReaderWrapper();
+  }
   SchemaVer schemaVer;
   int32_t readerVer;
   RowReaderWrapper::getVersions(row, schemaVer, readerVer);
