@@ -10,26 +10,43 @@ using nebula::cpp2::PropertyType;
 
 template <typename T, typename Container>
 Value extractIntOrFloat(const folly::StringPiece& data, size_t& offset) {
-  int32_t containerOffset;
-  memcpy(reinterpret_cast<void*>(&containerOffset), data.data() + offset, sizeof(int32_t));
-  if (static_cast<size_t>(containerOffset) >= data.size()) {
-    LOG(ERROR) << "Container offset out of bounds. Offset: " << containerOffset
+  // All position arithmetic is done in size_t to avoid signed overflow / UB.
+  // The in-place slot holds a 4-byte offset pointing at the container payload.
+  if (offset + sizeof(int32_t) > data.size()) {
+    LOG(ERROR) << "Container pointer out of bounds. Offset: " << offset
                << ", Data size: " << data.size();
     return Value::kNullValue;
   }
+  int32_t rawOffset;
+  memcpy(reinterpret_cast<void*>(&rawOffset), data.data() + offset, sizeof(int32_t));
+
+  // The payload starts with a 4-byte element count, so we need at least 4 bytes
+  // available at rawOffset before reading it.
+  if (rawOffset < 0 || static_cast<size_t>(rawOffset) + sizeof(int32_t) > data.size()) {
+    LOG(ERROR) << "Container offset out of bounds. Offset: " << rawOffset
+               << ", Data size: " << data.size();
+    return Value::kNullValue;
+  }
+  size_t pos = static_cast<size_t>(rawOffset);
+
   int32_t containerSize;
-  memcpy(reinterpret_cast<void*>(&containerSize), data.data() + containerOffset, sizeof(int32_t));
-  containerOffset += sizeof(int32_t);
+  memcpy(reinterpret_cast<void*>(&containerSize), data.data() + pos, sizeof(int32_t));
+  pos += sizeof(int32_t);
+  if (containerSize < 0) {
+    LOG(ERROR) << "Negative container size: " << containerSize;
+    return Value::kNullValue;
+  }
+
   Container container;
   for (int32_t i = 0; i < containerSize; ++i) {
-    T value;
-    if (static_cast<size_t>(containerOffset + sizeof(T)) > data.size()) {
-      LOG(ERROR) << "Reading beyond data bounds. Attempting to read at offset: " << containerOffset
+    if (pos + sizeof(T) > data.size()) {
+      LOG(ERROR) << "Reading beyond data bounds. Attempting to read at offset: " << pos
                  << ", Data size: " << data.size();
       return Value::kNullValue;
     }
-    memcpy(reinterpret_cast<void*>(&value), data.data() + containerOffset, sizeof(T));
-    containerOffset += sizeof(T);
+    T value;
+    memcpy(reinterpret_cast<void*>(&value), data.data() + pos, sizeof(T));
+    pos += sizeof(T);
 
     if constexpr (std::is_same_v<Container, List>) {
       container.values.emplace_back(Value(value));
@@ -297,7 +314,17 @@ Value RowReaderV2::getValueByIndex(const int64_t index) const {
 }
 
 int64_t RowReaderV2::getTimestamp() const noexcept {
-  return *reinterpret_cast<const int64_t*>(data_.begin() + (data_.size() - sizeof(int64_t)));
+  // The timestamp is appended as the trailing 8 bytes by RowWriterV2::finish().
+  // Guard against short/corrupt data: size_t underflow here would read wild
+  // memory. memcpy avoids the unaligned-access UB of a reinterpret_cast deref.
+  if (data_.size() < sizeof(int64_t)) {
+    return -1;
+  }
+  int64_t ts;
+  memcpy(reinterpret_cast<void*>(&ts),
+         data_.data() + (data_.size() - sizeof(int64_t)),
+         sizeof(int64_t));
+  return ts;
 }
 
 }  // namespace nebula
