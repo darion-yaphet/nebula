@@ -83,7 +83,7 @@ RowReaderWrapper::RowReaderWrapper(const meta::NebulaSchemaProvider* schema,
   CHECK_EQ(readerVer, 2);
   CHECK_NOTNULL(schema);
   readerV2_.resetImpl(schema, row);
-  currReader_ = &readerV2_;
+  valid_ = true;
 }
 
 bool RowReaderWrapper::reset(meta::NebulaSchemaProvider const* schema,
@@ -92,12 +92,12 @@ bool RowReaderWrapper::reset(meta::NebulaSchemaProvider const* schema,
   CHECK_EQ(readerVer, 2);
   CHECK_NOTNULL(schema);
   readerV2_.resetImpl(schema, row);
-  currReader_ = &readerV2_;
+  valid_ = true;
   return true;
 }
 
 bool RowReaderWrapper::reset(meta::NebulaSchemaProvider const* schema, folly::StringPiece row) {
-  currReader_ = nullptr;
+  valid_ = false;
   if (schema == nullptr) {
     return false;
   }
@@ -113,7 +113,7 @@ bool RowReaderWrapper::reset(meta::NebulaSchemaProvider const* schema, folly::St
 bool RowReaderWrapper::reset(
     const std::vector<std::shared_ptr<const meta::NebulaSchemaProvider>>& schemas,
     folly::StringPiece row) {
-  currReader_ = nullptr;
+  valid_ = false;
   SchemaVer schemaVer;
   int32_t readerVer;
   RowReaderWrapper::getVersions(row, schemaVer, readerVer);
