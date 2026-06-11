@@ -63,6 +63,18 @@ nebula_add_test(
 )
 
 
+nebula_add_test(
+    NAME row_container_test
+    SOURCES RowContainerTest.cpp
+    OBJECTS ${CODEC_TEST_LIBS}
+    LIBRARIES
+        ${THRIFT_LIBRARIES}
+        ${PROXYGEN_LIBRARIES}
+        wangle
+        gtest
+)
+
+
 nebula_add_executable(
     NAME row_writer_bm
     SOURCES
