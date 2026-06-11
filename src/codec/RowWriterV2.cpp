@@ -921,47 +921,104 @@ WriteResult RowWriterV2::checkUnsetFields() {
   return WriteResult::SUCCEEDED;
 }
 
+// static
+size_t RowWriterV2::containerDataSize(const std::string& buf,
+                                      int32_t dataOffset,
+                                      PropertyType type) {
+  int32_t count;
+  memcpy(reinterpret_cast<void*>(&count), &buf[dataOffset], sizeof(int32_t));
+
+  switch (type) {
+    case PropertyType::LIST_INT:
+    case PropertyType::SET_INT:
+      return sizeof(int32_t) + static_cast<size_t>(count) * sizeof(int32_t);
+    case PropertyType::LIST_FLOAT:
+    case PropertyType::SET_FLOAT:
+      return sizeof(int32_t) + static_cast<size_t>(count) * sizeof(float);
+    case PropertyType::LIST_STRING:
+    case PropertyType::SET_STRING: {
+      int32_t pos = dataOffset + sizeof(int32_t);
+      for (int32_t i = 0; i < count; ++i) {
+        int32_t strLen;
+        memcpy(reinterpret_cast<void*>(&strLen), &buf[pos], sizeof(int32_t));
+        pos += sizeof(int32_t) + strLen;
+      }
+      return static_cast<size_t>(pos - dataOffset);
+    }
+    default:
+      LOG(FATAL) << "containerDataSize called with non-container type: "
+                 << static_cast<int>(type);
+      return 0;
+  }
+}
+
 std::string RowWriterV2::processOutOfSpace() {
   std::string temp;
-  // Reserve enough space to avoid memory re-allocation
   temp.reserve(headerLen_ + numNullBytes_ + schema_->size() + approxStrLen_ + sizeof(int64_t));
-  // Copy the data except the strings
+  // Copy the fixed area (header + null flags + all field slots); variable-length
+  // data (strings, lists, sets) is re-appended and their offsets patched below.
   temp.append(buf_.data(), headerLen_ + numNullBytes_ + schema_->size());
 
-  // Now let's process all strings
   for (size_t i = 0; i < schema_->getNumFields(); i++) {
     auto field = schema_->field(i);
-    if (field->type() != PropertyType::STRING && field->type() != PropertyType::GEOGRAPHY) {
-      continue;
-    }
-
     size_t offset = headerLen_ + numNullBytes_ + field->offset();
-    int32_t oldOffset;
-    int32_t newOffset = temp.size();
-    int32_t strLen;
 
-    if (field->nullable() && checkNullBit(field->nullFlagPos())) {
-      // Null string
-      newOffset = strLen = 0;
-    } else {
-      // load the old offset and string length
-      memcpy(reinterpret_cast<void*>(&oldOffset), &buf_[offset], sizeof(int32_t));
-      memcpy(reinterpret_cast<void*>(&strLen), &buf_[offset + sizeof(int32_t)], sizeof(int32_t));
+    switch (field->type()) {
+      case PropertyType::STRING:
+      case PropertyType::GEOGRAPHY: {
+        // Fixed slot: [offset(4) | len(4)]
+        int32_t oldOffset;
+        int32_t newOffset = temp.size();
+        int32_t strLen;
 
-      if (oldOffset > 0) {
-        temp.append(&buf_[oldOffset], strLen);
-      } else {
-        // Out of space string
-        CHECK_LT(strLen, strList_.size());
-        temp.append(strList_[strLen]);
-        strLen = strList_[strLen].size();
+        if (field->nullable() && checkNullBit(field->nullFlagPos())) {
+          newOffset = strLen = 0;
+        } else {
+          memcpy(reinterpret_cast<void*>(&oldOffset), &buf_[offset], sizeof(int32_t));
+          memcpy(reinterpret_cast<void*>(&strLen), &buf_[offset + sizeof(int32_t)], sizeof(int32_t));
+
+          if (oldOffset > 0) {
+            temp.append(&buf_[oldOffset], strLen);
+          } else {
+            // Out-of-space string: strLen holds the index into strList_
+            CHECK_LT(strLen, static_cast<int32_t>(strList_.size()));
+            temp.append(strList_[strLen]);
+            strLen = strList_[strLen].size();
+          }
+        }
+
+        memcpy(&temp[offset], reinterpret_cast<void*>(&newOffset), sizeof(int32_t));
+        memcpy(&temp[offset + sizeof(int32_t)], reinterpret_cast<void*>(&strLen), sizeof(int32_t));
+        break;
       }
-    }
 
-    // Set the new offset and length
-    memcpy(&temp[offset], reinterpret_cast<void*>(&newOffset), sizeof(int32_t));
-    memcpy(&temp[offset + sizeof(int32_t)], reinterpret_cast<void*>(&strLen), sizeof(int32_t));
+      case PropertyType::LIST_STRING:
+      case PropertyType::LIST_INT:
+      case PropertyType::LIST_FLOAT:
+      case PropertyType::SET_STRING:
+      case PropertyType::SET_INT:
+      case PropertyType::SET_FLOAT: {
+        // Fixed slot: [offset(4)] only.
+        // Data layout at offset: [count(4) | items...]
+        if (field->nullable() && checkNullBit(field->nullFlagPos())) {
+          int32_t newOffset = 0;
+          memcpy(&temp[offset], reinterpret_cast<void*>(&newOffset), sizeof(int32_t));
+        } else {
+          int32_t oldOffset;
+          memcpy(reinterpret_cast<void*>(&oldOffset), &buf_[offset], sizeof(int32_t));
+          int32_t newOffset = temp.size();
+          size_t dataSize = containerDataSize(buf_, oldOffset, field->type());
+          temp.append(&buf_[oldOffset], dataSize);
+          memcpy(&temp[offset], reinterpret_cast<void*>(&newOffset), sizeof(int32_t));
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
   }
+
   return temp;
 }
 
