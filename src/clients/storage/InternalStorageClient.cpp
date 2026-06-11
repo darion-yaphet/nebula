@@ -12,6 +12,11 @@ namespace storage {
 
 constexpr int32_t kInternalPortOffset = -2;
 
+// Maximum number of times a chain RPC retries on E_LEADER_CHANGED before
+// giving up. Bounds the otherwise-unbounded retry loop that would never settle
+// the promise when the leader keeps moving.
+constexpr int32_t kMaxLeaderChangeRetries = 3;
+
 template <typename T>
 ::nebula::cpp2::ErrorCode getErrorCode(T& tryResp) {
   if (!tryResp.hasValue()) {
@@ -45,6 +50,16 @@ void InternalStorageClient::chainUpdateEdge(cpp2::UpdateEdgeRequest& reversedReq
                                             std::optional<int64_t> optVersion,
                                             folly::Promise<::nebula::cpp2::ErrorCode>&& p,
                                             folly::EventBase* evb) {
+  chainUpdateEdgeImpl(
+      reversedRequest, termOfSrc, optVersion, std::move(p), evb, kMaxLeaderChangeRetries);
+}
+
+void InternalStorageClient::chainUpdateEdgeImpl(cpp2::UpdateEdgeRequest& reversedRequest,
+                                                TermID termOfSrc,
+                                                std::optional<int64_t> optVersion,
+                                                folly::Promise<::nebula::cpp2::ErrorCode>&& p,
+                                                folly::EventBase* evb,
+                                                int32_t retriesLeft) {
   auto spaceId = reversedRequest.get_space_id();
   auto partId = reversedRequest.get_part_id();
   auto optLeader = getLeader(spaceId, partId);
@@ -76,7 +91,13 @@ void InternalStorageClient::chainUpdateEdge(cpp2::UpdateEdgeRequest& reversedReq
     auto code = getErrorCode(t);
     VLOG(1) << "chainUpdateEdge rpc: " << apache::thrift::util::enumNameSafe(code);
     if (code == ::nebula::cpp2::ErrorCode::E_LEADER_CHANGED) {
-      chainUpdateEdge(reversedRequest, termOfSrc, optVersion, std::move(p));
+      if (retriesLeft > 0) {
+        chainUpdateEdgeImpl(
+            reversedRequest, termOfSrc, optVersion, std::move(p), evb, retriesLeft - 1);
+      } else {
+        LOG(WARNING) << "chainUpdateEdge exhausted leader-change retries, giving up";
+        p.setValue(::nebula::cpp2::ErrorCode::E_LEADER_CHANGED);
+      }
     } else {
       p.setValue(code);
     }
@@ -89,6 +110,15 @@ void InternalStorageClient::chainAddEdges(cpp2::AddEdgesRequest& directReq,
                                           std::optional<int64_t> optVersion,
                                           folly::Promise<nebula::cpp2::ErrorCode>&& p,
                                           folly::EventBase* evb) {
+  chainAddEdgesImpl(directReq, termId, optVersion, std::move(p), evb, kMaxLeaderChangeRetries);
+}
+
+void InternalStorageClient::chainAddEdgesImpl(cpp2::AddEdgesRequest& directReq,
+                                              TermID termId,
+                                              std::optional<int64_t> optVersion,
+                                              folly::Promise<nebula::cpp2::ErrorCode>&& p,
+                                              folly::EventBase* evb,
+                                              int32_t retriesLeft) {
   auto spaceId = directReq.get_space_id();
   auto partId = directReq.get_parts().begin()->first;
   auto optLeader = getLeader(directReq.get_space_id(), partId);
@@ -114,7 +144,12 @@ void InternalStorageClient::chainAddEdges(cpp2::AddEdgesRequest& directReq,
   std::move(resp).thenTry([=, p = std::move(p)](auto&& t) mutable {
     auto code = getErrorCode(t);
     if (code == nebula::cpp2::ErrorCode::E_LEADER_CHANGED) {
-      chainAddEdges(directReq, termId, optVersion, std::move(p));
+      if (retriesLeft > 0) {
+        chainAddEdgesImpl(directReq, termId, optVersion, std::move(p), evb, retriesLeft - 1);
+      } else {
+        LOG(WARNING) << "chainAddEdges exhausted leader-change retries, giving up";
+        p.setValue(nebula::cpp2::ErrorCode::E_LEADER_CHANGED);
+      }
     } else {
       p.setValue(code);
     }
@@ -142,6 +177,15 @@ void InternalStorageClient::chainDeleteEdges(cpp2::DeleteEdgesRequest& req,
                                              TermID termId,
                                              folly::Promise<nebula::cpp2::ErrorCode>&& p,
                                              folly::EventBase* evb) {
+  chainDeleteEdgesImpl(req, txnId, termId, std::move(p), evb, kMaxLeaderChangeRetries);
+}
+
+void InternalStorageClient::chainDeleteEdgesImpl(cpp2::DeleteEdgesRequest& req,
+                                                 const std::string& txnId,
+                                                 TermID termId,
+                                                 folly::Promise<nebula::cpp2::ErrorCode>&& p,
+                                                 folly::EventBase* evb,
+                                                 int32_t retriesLeft) {
   auto spaceId = req.get_space_id();
   auto partId = req.get_parts().begin()->first;
   auto optLeader = getLeader(req.get_space_id(), partId);
@@ -171,7 +215,12 @@ void InternalStorageClient::chainDeleteEdges(cpp2::DeleteEdgesRequest& req,
   std::move(resp).thenTry([=, p = std::move(p)](auto&& t) mutable {
     auto code = getErrorCode(t);
     if (code == nebula::cpp2::ErrorCode::E_LEADER_CHANGED) {
-      chainDeleteEdges(req, txnId, termId, std::move(p));
+      if (retriesLeft > 0) {
+        chainDeleteEdgesImpl(req, txnId, termId, std::move(p), evb, retriesLeft - 1);
+      } else {
+        LOG(WARNING) << "chainDeleteEdges exhausted leader-change retries, giving up";
+        p.setValue(nebula::cpp2::ErrorCode::E_LEADER_CHANGED);
+      }
     } else {
       p.setValue(code);
     }

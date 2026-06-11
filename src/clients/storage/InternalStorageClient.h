@@ -56,6 +56,31 @@ class InternalStorageClient
   cpp2::ChainAddEdgesRequest makeChainAddReq(const cpp2::AddEdgesRequest& req,
                                              TermID termId,
                                              std::optional<int64_t> optVersion);
+
+  // Implementations that carry a remaining-retry budget. On E_LEADER_CHANGED
+  // they retry against the refreshed leader until the budget is exhausted,
+  // after which the promise is settled with E_LEADER_CHANGED instead of
+  // retrying forever.
+  void chainUpdateEdgeImpl(cpp2::UpdateEdgeRequest& reversedRequest,
+                           TermID termOfSrc,
+                           std::optional<int64_t> optVersion,
+                           folly::Promise<::nebula::cpp2::ErrorCode>&& p,
+                           folly::EventBase* evb,
+                           int32_t retriesLeft);
+
+  void chainAddEdgesImpl(cpp2::AddEdgesRequest& req,
+                         TermID termId,
+                         std::optional<int64_t> optVersion,
+                         folly::Promise<::nebula::cpp2::ErrorCode>&& p,
+                         folly::EventBase* evb,
+                         int32_t retriesLeft);
+
+  void chainDeleteEdgesImpl(cpp2::DeleteEdgesRequest& req,
+                            const std::string& txnId,
+                            TermID termId,
+                            folly::Promise<::nebula::cpp2::ErrorCode>&& p,
+                            folly::EventBase* evb,
+                            int32_t retriesLeft);
 };
 
 }  // namespace storage
