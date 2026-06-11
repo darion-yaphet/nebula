@@ -246,6 +246,11 @@ class RowWriterV2 {
   WriteResult write(ssize_t index, float v);
   WriteResult write(ssize_t index, double v);
 
+  // Unified implementation for all signed integral write overloads.
+  // Uses if-constexpr to conditionally emit range checks based on sizeof(T).
+  template <typename T>
+  WriteResult writeIntegral(ssize_t index, T v);
+
   WriteResult write(ssize_t index, int8_t v);
   WriteResult write(ssize_t index, int16_t v);
   WriteResult write(ssize_t index, int32_t v);
