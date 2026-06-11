@@ -489,44 +489,75 @@ WriteResult RowWriterV2::write(ssize_t index, double v) {
   return WriteResult::SUCCEEDED;
 }
 
-WriteResult RowWriterV2::write(ssize_t index, uint8_t v) {
-  return write(index, static_cast<int8_t>(v));
-}
-
-WriteResult RowWriterV2::write(ssize_t index, int8_t v) {
+// Unified implementation for write(int8/16/32/64).
+//
+// Range checks are emitted only when the source type is wider than the target
+// (if constexpr, zero runtime cost when the check is statically impossible).
+// TIMESTAMP is only reachable for T >= int32_t; narrower types fall through to
+// the default TYPE_MISMATCH, matching the previous per-overload behavior.
+template <typename T>
+WriteResult RowWriterV2::writeIntegral(ssize_t index, T v) {
+  static_assert(std::is_integral_v<T> && std::is_signed_v<T>);
   auto field = schema_->field(index);
   auto offset = headerLen_ + numNullBytes_ + field->offset();
   switch (field->type()) {
-    case PropertyType::BOOL: {
+    case PropertyType::BOOL:
       buf_[offset] = v == 0 ? 0x00 : 0x01;
       break;
-    }
     case PropertyType::INT8: {
-      buf_[offset] = v;
+      if constexpr (sizeof(T) > sizeof(int8_t)) {
+        if (v > std::numeric_limits<int8_t>::max() || v < std::numeric_limits<int8_t>::min()) {
+          return WriteResult::OUT_OF_RANGE;
+        }
+      }
+      buf_[offset] = static_cast<int8_t>(v);
       break;
     }
     case PropertyType::INT16: {
-      int16_t iv = v;
+      if constexpr (sizeof(T) > sizeof(int16_t)) {
+        if (v > std::numeric_limits<int16_t>::max() || v < std::numeric_limits<int16_t>::min()) {
+          return WriteResult::OUT_OF_RANGE;
+        }
+      }
+      int16_t iv = static_cast<int16_t>(v);
       memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int16_t));
       break;
     }
     case PropertyType::INT32: {
-      int32_t iv = v;
+      if constexpr (sizeof(T) > sizeof(int32_t)) {
+        if (v > std::numeric_limits<int32_t>::max() || v < std::numeric_limits<int32_t>::min()) {
+          return WriteResult::OUT_OF_RANGE;
+        }
+      }
+      int32_t iv = static_cast<int32_t>(v);
       memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int32_t));
       break;
     }
+    case PropertyType::TIMESTAMP: {
+      if constexpr (sizeof(T) >= sizeof(int32_t)) {
+        auto ret = time::TimeUtils::toTimestamp(v);
+        if (!ret.ok()) {
+          return WriteResult::OUT_OF_RANGE;
+        }
+        auto ts = ret.value().getInt();
+        memcpy(&buf_[offset], reinterpret_cast<void*>(&ts), sizeof(int64_t));
+        break;
+      } else {
+        return WriteResult::TYPE_MISMATCH;
+      }
+    }
     case PropertyType::INT64: {
-      int64_t iv = v;
+      int64_t iv = static_cast<int64_t>(v);
       memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int64_t));
       break;
     }
     case PropertyType::FLOAT: {
-      float fv = v;
+      float fv = static_cast<float>(v);
       memcpy(&buf_[offset], reinterpret_cast<void*>(&fv), sizeof(float));
       break;
     }
     case PropertyType::DOUBLE: {
-      double dv = v;
+      double dv = static_cast<double>(v);
       memcpy(&buf_[offset], reinterpret_cast<void*>(&dv), sizeof(double));
       break;
     }
@@ -538,6 +569,14 @@ WriteResult RowWriterV2::write(ssize_t index, int8_t v) {
   }
   isSet_[index] = true;
   return WriteResult::SUCCEEDED;
+}
+
+WriteResult RowWriterV2::write(ssize_t index, uint8_t v) {
+  return write(index, static_cast<int8_t>(v));
+}
+
+WriteResult RowWriterV2::write(ssize_t index, int8_t v) {
+  return writeIntegral(index, v);
 }
 
 WriteResult RowWriterV2::write(ssize_t index, uint16_t v) {
@@ -545,53 +584,7 @@ WriteResult RowWriterV2::write(ssize_t index, uint16_t v) {
 }
 
 WriteResult RowWriterV2::write(ssize_t index, int16_t v) {
-  auto field = schema_->field(index);
-  auto offset = headerLen_ + numNullBytes_ + field->offset();
-  switch (field->type()) {
-    case PropertyType::BOOL: {
-      buf_[offset] = v == 0 ? 0x00 : 0x01;
-      break;
-    }
-    case PropertyType::INT8: {
-      if (v > std::numeric_limits<int8_t>::max() || v < std::numeric_limits<int8_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int8_t iv = v;
-      buf_[offset] = iv;
-      break;
-    }
-    case PropertyType::INT16: {
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&v), sizeof(int16_t));
-      break;
-    }
-    case PropertyType::INT32: {
-      int32_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int32_t));
-      break;
-    }
-    case PropertyType::INT64: {
-      int64_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int64_t));
-      break;
-    }
-    case PropertyType::FLOAT: {
-      float fv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&fv), sizeof(float));
-      break;
-    }
-    case PropertyType::DOUBLE: {
-      double dv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&dv), sizeof(double));
-      break;
-    }
-    default:
-      return WriteResult::TYPE_MISMATCH;
-  }
-  if (field->nullable()) {
-    clearNullBit(field->nullFlagPos());
-  }
-  isSet_[index] = true;
-  return WriteResult::SUCCEEDED;
+  return writeIntegral(index, v);
 }
 
 WriteResult RowWriterV2::write(ssize_t index, uint32_t v) {
@@ -599,66 +592,7 @@ WriteResult RowWriterV2::write(ssize_t index, uint32_t v) {
 }
 
 WriteResult RowWriterV2::write(ssize_t index, int32_t v) {
-  auto field = schema_->field(index);
-  auto offset = headerLen_ + numNullBytes_ + field->offset();
-  switch (field->type()) {
-    case PropertyType::BOOL: {
-      buf_[offset] = v == 0 ? 0x00 : 0x01;
-      break;
-    }
-    case PropertyType::INT8: {
-      if (v > std::numeric_limits<int8_t>::max() || v < std::numeric_limits<int8_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int8_t iv = v;
-      buf_[offset] = iv;
-      break;
-    }
-    case PropertyType::INT16: {
-      if (v > std::numeric_limits<int16_t>::max() || v < std::numeric_limits<int16_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int16_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int16_t));
-      break;
-    }
-    case PropertyType::INT32: {
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&v), sizeof(int32_t));
-      break;
-    }
-    case PropertyType::TIMESTAMP: {
-      // 32-bit timestamp can only support upto 2038-01-19
-      auto ret = time::TimeUtils::toTimestamp(v);
-      if (!ret.ok()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      auto ts = ret.value().getInt();
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&ts), sizeof(int64_t));
-      break;
-    }
-    case PropertyType::INT64: {
-      int64_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int64_t));
-      break;
-    }
-    case PropertyType::FLOAT: {
-      float fv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&fv), sizeof(float));
-      break;
-    }
-    case PropertyType::DOUBLE: {
-      double dv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&dv), sizeof(double));
-      break;
-    }
-    default:
-      return WriteResult::TYPE_MISMATCH;
-  }
-  if (field->nullable()) {
-    clearNullBit(field->nullFlagPos());
-  }
-  isSet_[index] = true;
-  return WriteResult::SUCCEEDED;
+  return writeIntegral(index, v);
 }
 
 WriteResult RowWriterV2::write(ssize_t index, uint64_t v) {
@@ -666,69 +600,7 @@ WriteResult RowWriterV2::write(ssize_t index, uint64_t v) {
 }
 
 WriteResult RowWriterV2::write(ssize_t index, int64_t v) {
-  auto field = schema_->field(index);
-  auto offset = headerLen_ + numNullBytes_ + field->offset();
-  switch (field->type()) {
-    case PropertyType::BOOL: {
-      buf_[offset] = v == 0 ? 0x00 : 0x01;
-      break;
-    }
-    case PropertyType::INT8: {
-      if (v > std::numeric_limits<int8_t>::max() || v < std::numeric_limits<int8_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int8_t iv = v;
-      buf_[offset] = iv;
-      break;
-    }
-    case PropertyType::INT16: {
-      if (v > std::numeric_limits<int16_t>::max() || v < std::numeric_limits<int16_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int16_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int16_t));
-      break;
-    }
-    case PropertyType::INT32: {
-      if (v > std::numeric_limits<int32_t>::max() || v < std::numeric_limits<int32_t>::min()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      int32_t iv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&iv), sizeof(int32_t));
-      break;
-    }
-    case PropertyType::TIMESTAMP: {
-      // 64-bit timestamp has way broader time range
-      auto ret = time::TimeUtils::toTimestamp(v);
-      if (!ret.ok()) {
-        return WriteResult::OUT_OF_RANGE;
-      }
-      auto ts = ret.value().getInt();
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&ts), sizeof(int64_t));
-      break;
-    }
-    case PropertyType::INT64: {
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&v), sizeof(int64_t));
-      break;
-    }
-    case PropertyType::FLOAT: {
-      float fv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&fv), sizeof(float));
-      break;
-    }
-    case PropertyType::DOUBLE: {
-      double dv = v;
-      memcpy(&buf_[offset], reinterpret_cast<void*>(&dv), sizeof(double));
-      break;
-    }
-    default:
-      return WriteResult::TYPE_MISMATCH;
-  }
-  if (field->nullable()) {
-    clearNullBit(field->nullFlagPos());
-  }
-  isSet_[index] = true;
-  return WriteResult::SUCCEEDED;
+  return writeIntegral(index, v);
 }
 
 WriteResult RowWriterV2::write(ssize_t index, const std::string& v) {
