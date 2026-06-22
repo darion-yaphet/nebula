@@ -10,6 +10,8 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <rocksdb/db.h>
 
+#include <functional>
+
 #include "clients/meta/MetaClient.h"
 #include "codec/RowReaderWrapper.h"
 #include "codec/RowWriterV2.h"
@@ -117,6 +119,20 @@ class UpgraderSpace {
   void runPartV2();
 
   void runPartV3();
+
+  // Launch up to FLAGS_max_concurrent_parts workers running `runner` and block
+  // until every part has been processed.
+  void runConcurrentParts(const std::function<void()>& runner);
+
+  // Decrement the unfinished-part counter for `partId`. When parts remain,
+  // reschedule `runner` to pick up the next one; otherwise log completion.
+  void finishOnePart(PartitionID partId, const std::function<void()>& runner);
+
+  // Copy system data (identified by `prefix`) verbatim from src to dst engine.
+  void handleSystemData(const std::string& prefix);
+
+  // multiPut `data` into the write engine, abort on failure, then clear it.
+  void writeBatch(PartitionID partId, std::vector<kvstore::KV>& data);
 
  public:
   // Source data path

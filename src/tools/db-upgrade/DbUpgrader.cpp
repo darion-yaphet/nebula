@@ -210,6 +210,74 @@ bool UpgraderSpace::isValidVidLen(VertexID srcVId, VertexID dstVId) {
   return true;
 }
 
+void UpgraderSpace::runConcurrentParts(const std::function<void()>& runner) {
+  // Parallel process part
+  auto partConcurrency = std::min(static_cast<size_t>(FLAGS_max_concurrent_parts), parts_.size());
+  LOG(INFO) << "Max concurrent parts: " << partConcurrency;
+  unFinishedPart_ = parts_.size();
+
+  LOG(INFO) << "Start to handle vertex/edge/index of parts data in space id " << spaceId_;
+  for (size_t i = 0; i < partConcurrency; ++i) {
+    pool_->add(runner);
+  }
+
+  while (unFinishedPart_ != 0) {
+    sleep(10);
+  }
+}
+
+void UpgraderSpace::finishOnePart(PartitionID partId, const std::function<void()>& runner) {
+  auto unFinishedPart = --unFinishedPart_;
+  if (unFinishedPart == 0) {
+    // all parts has finished
+    LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
+              << spaceId_ << " finished";
+  } else {
+    pool_->add(runner);
+  }
+}
+
+void UpgraderSpace::writeBatch(PartitionID partId, std::vector<kvstore::KV>& data) {
+  auto code = writeEngine_->multiPut(data);
+  if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
+    LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId << " failed.";
+  }
+  data.clear();
+}
+
+void UpgraderSpace::handleSystemData(const std::string& prefix) {
+  LOG(INFO) << "Start to handle system data in space id " << spaceId_;
+  std::unique_ptr<kvstore::KVIterator> iter;
+  auto retCode = readEngine_->prefix(prefix, &iter);
+  if (retCode != nebula::cpp2::ErrorCode::SUCCEEDED) {
+    LOG(ERROR) << "Space id " << spaceId_ << " get system data failed";
+    LOG(ERROR) << "Handle system data in space id " << spaceId_ << " failed";
+    return;
+  }
+  std::vector<kvstore::KV> data;
+  while (iter && iter->valid()) {
+    auto key = iter->key();
+    auto val = iter->val();
+    data.emplace_back(std::move(key), std::move(val));
+    if (data.size() >= FLAGS_write_batch_num) {
+      VLOG(2) << "Send system data total rows " << data.size();
+      auto code = writeEngine_->multiPut(data);
+      if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
+        LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
+      }
+      data.clear();
+    }
+    iter->next();
+  }
+
+  auto code = writeEngine_->multiPut(data);
+  if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
+    LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
+  }
+  LOG(INFO) << "Handle system data in space id " << spaceId_ << " success";
+  LOG(INFO) << "Handle data in space id " << spaceId_ << " success";
+}
+
 void UpgraderSpace::runPartV1() {
   std::chrono::milliseconds take_dura{10};
   if (auto pId = partQueue_.try_take_for(take_dura)) {
@@ -224,15 +292,7 @@ void UpgraderSpace::runPartV1() {
       LOG(ERROR) << "Space id " << spaceId_ << " part " << partId << " no found!";
       LOG(ERROR) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id "
                  << partId << " failed";
-
-      auto unFinishedPart = --unFinishedPart_;
-      if (unFinishedPart == 0) {
-        // all parts has finished
-        LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                  << spaceId_ << " finished";
-      } else {
-        pool_->add(std::bind(&UpgraderSpace::runPartV1, this));
-      }
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV1, this));
       return;
     }
 
@@ -337,34 +397,16 @@ void UpgraderSpace::runPartV1() {
 
       if (data.size() >= FLAGS_write_batch_num) {
         VLOG(2) << "Send record total rows " << data.size();
-        auto code = writeEngine_->multiPut(data);
-        if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-          LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId
-                     << " failed.";
-        }
-        data.clear();
+        writeBatch(partId, data);
       }
 
       iter->next();
     }
 
-    auto code = writeEngine_->multiPut(data);
-    if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId
-                 << " failed.";
-    }
-    data.clear();
+    writeBatch(partId, data);
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " finished";
-
-    auto unFinishedPart = --unFinishedPart_;
-    if (unFinishedPart == 0) {
-      // all parts has finished
-      LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                << spaceId_ << " finished";
-    } else {
-      pool_->add(std::bind(&UpgraderSpace::runPartV1, this));
-    }
+    finishOnePart(partId, std::bind(&UpgraderSpace::runPartV1, this));
   } else {
     LOG(INFO) << "Handle vertex/edge/index of parts data in space id " << spaceId_ << " finished";
   }
@@ -372,56 +414,8 @@ void UpgraderSpace::runPartV1() {
 
 void UpgraderSpace::doProcessV1() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
-
-  // Parallel process part
-  auto partConcurrency = std::min(static_cast<size_t>(FLAGS_max_concurrent_parts), parts_.size());
-  LOG(INFO) << "Max concurrent parts: " << partConcurrency;
-
-  unFinishedPart_ = parts_.size();
-
-  LOG(INFO) << "Start to handle vertex/edge/index of parts data in space id " << spaceId_;
-  for (size_t i = 0; i < partConcurrency; ++i) {
-    pool_->add(std::bind(&UpgraderSpace::runPartV1, this));
-  }
-
-  while (unFinishedPart_ != 0) {
-    sleep(10);
-  }
-
-  // handle system data
-  {
-    LOG(INFO) << "Start to handle system data in space id " << spaceId_;
-    auto prefix = NebulaKeyUtilsV1::systemPrefix();
-    std::unique_ptr<kvstore::KVIterator> iter;
-    auto retCode = readEngine_->prefix(prefix, &iter);
-    if (retCode != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(ERROR) << "Space id " << spaceId_ << " get system data failed";
-      LOG(ERROR) << "Handle system data in space id " << spaceId_ << " failed";
-      return;
-    }
-    std::vector<kvstore::KV> data;
-    while (iter && iter->valid()) {
-      auto key = iter->key();
-      auto val = iter->val();
-      data.emplace_back(std::move(key), std::move(val));
-      if (data.size() >= FLAGS_write_batch_num) {
-        VLOG(2) << "Send system data total rows " << data.size();
-        auto code = writeEngine_->multiPut(data);
-        if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-          LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
-        }
-        data.clear();
-      }
-      iter->next();
-    }
-
-    auto code = writeEngine_->multiPut(data);
-    if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
-    }
-    LOG(INFO) << "Handle system data in space id " << spaceId_ << " success";
-    LOG(INFO) << "Handle data in space id " << spaceId_ << " success";
-  }
+  runConcurrentParts(std::bind(&UpgraderSpace::runPartV1, this));
+  handleSystemData(NebulaKeyUtilsV1::systemPrefix());
 }
 
 void UpgraderSpace::runPartV2() {
@@ -438,15 +432,7 @@ void UpgraderSpace::runPartV2() {
       LOG(ERROR) << "Space id " << spaceId_ << " part " << partId << " no found!";
       LOG(ERROR) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id "
                  << partId << " failed";
-
-      auto unFinishedPart = --unFinishedPart_;
-      if (unFinishedPart == 0) {
-        // all parts has finished
-        LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                  << spaceId_ << " finished";
-      } else {
-        pool_->add(std::bind(&UpgraderSpace::runPartV2, this));
-      }
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV2, this));
       return;
     }
 
@@ -546,34 +532,16 @@ void UpgraderSpace::runPartV2() {
 
       if (data.size() >= FLAGS_write_batch_num) {
         VLOG(2) << "Send record total rows " << data.size();
-        auto code = writeEngine_->multiPut(data);
-        if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-          LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId
-                     << " failed.";
-        }
-        data.clear();
+        writeBatch(partId, data);
       }
 
       iter->next();
     }
 
-    auto code = writeEngine_->multiPut(data);
-    if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId
-                 << " failed.";
-    }
-    data.clear();
+    writeBatch(partId, data);
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " succeed";
-
-    auto unFinishedPart = --unFinishedPart_;
-    if (unFinishedPart == 0) {
-      // all parts has finished
-      LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                << spaceId_ << " finished.";
-    } else {
-      pool_->add(std::bind(&UpgraderSpace::runPartV2, this));
-    }
+    finishOnePart(partId, std::bind(&UpgraderSpace::runPartV2, this));
   } else {
     LOG(INFO) << "Handle vertex/edge/index of parts data in space id " << spaceId_ << " finished";
   }
@@ -581,55 +549,8 @@ void UpgraderSpace::runPartV2() {
 
 void UpgraderSpace::doProcessV2() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
-
-  // Parallel process part
-  auto partConcurrency = std::min(static_cast<size_t>(FLAGS_max_concurrent_parts), parts_.size());
-  LOG(INFO) << "Max concurrent parts: " << partConcurrency;
-  unFinishedPart_ = parts_.size();
-
-  LOG(INFO) << "Start to handle vertex/edge/index of parts data in space id " << spaceId_;
-  for (size_t i = 0; i < partConcurrency; ++i) {
-    pool_->add(std::bind(&UpgraderSpace::runPartV2, this));
-  }
-
-  while (unFinishedPart_ != 0) {
-    sleep(10);
-  }
-
-  // handle system data
-  {
-    LOG(INFO) << "Start to handle system data in space id " << spaceId_;
-    auto prefix = NebulaKeyUtilsV2::systemPrefix();
-    std::unique_ptr<kvstore::KVIterator> iter;
-    auto retCode = readEngine_->prefix(prefix, &iter);
-    if (retCode != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(ERROR) << "Space id " << spaceId_ << " get system data failed.";
-      LOG(ERROR) << "Handle system data in space id " << spaceId_ << " failed.";
-      return;
-    }
-    std::vector<kvstore::KV> data;
-    while (iter && iter->valid()) {
-      auto key = iter->key();
-      auto val = iter->val();
-      data.emplace_back(std::move(key), std::move(val));
-      if (data.size() >= FLAGS_write_batch_num) {
-        VLOG(2) << "Send system data total rows " << data.size();
-        auto code = writeEngine_->multiPut(data);
-        if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-          LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
-        }
-        data.clear();
-      }
-      iter->next();
-    }
-
-    auto code = writeEngine_->multiPut(data);
-    if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
-    }
-    LOG(INFO) << "Handle system data in space id " << spaceId_ << " success";
-    LOG(INFO) << "Handle data in space id " << spaceId_ << " success";
-  }
+  runConcurrentParts(std::bind(&UpgraderSpace::runPartV2, this));
+  handleSystemData(NebulaKeyUtilsV2::systemPrefix());
 }
 
 void UpgraderSpace::encodeVertexValue(PartitionID partId,
@@ -899,15 +820,7 @@ void UpgraderSpace::runPartV3() {
       LOG(ERROR) << "Space id " << spaceId_ << " part " << partId << " no found!";
       LOG(ERROR) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id "
                  << partId << " failed";
-
-      auto unFinishedPart = --unFinishedPart_;
-      if (unFinishedPart == 0) {
-        // all parts has finished
-        LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                  << spaceId_ << " finished";
-      } else {
-        pool_->add(std::bind(&UpgraderSpace::runPartV3, this));
-      }
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV3, this));
       return;
     }
     int64_t ingestFileCount = 0;
@@ -963,34 +876,14 @@ void UpgraderSpace::runPartV3() {
     }
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " succeed";
-
-    auto unFinishedPart = --unFinishedPart_;
-    if (unFinishedPart == 0) {
-      // all parts has finished
-      LOG(INFO) << "Handle last part: " << partId << " vertex/edge/index data in space id "
-                << spaceId_ << " finished.";
-    } else {
-      pool_->add(std::bind(&UpgraderSpace::runPartV3, this));
-    }
+    finishOnePart(partId, std::bind(&UpgraderSpace::runPartV3, this));
   } else {
     LOG(INFO) << "Handle vertex/edge/index of parts data in space id " << spaceId_ << " finished";
   }
 }
 void UpgraderSpace::doProcessV3() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
-  // Parallel process part
-  auto partConcurrency = std::min(static_cast<size_t>(FLAGS_max_concurrent_parts), parts_.size());
-  LOG(INFO) << "Max concurrent parts: " << partConcurrency;
-  unFinishedPart_ = parts_.size();
-
-  LOG(INFO) << "Start to handle vertex/edge/index of parts data in space id " << spaceId_;
-  for (size_t i = 0; i < partConcurrency; ++i) {
-    pool_->add(std::bind(&UpgraderSpace::runPartV3, this));
-  }
-
-  while (unFinishedPart_ != 0) {
-    sleep(10);
-  }
+  runConcurrentParts(std::bind(&UpgraderSpace::runPartV3, this));
 
   if (ingest_sst_file_.size() != 0) {
     auto code = readEngine_->ingest(ingest_sst_file_, true);
