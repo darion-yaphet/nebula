@@ -10,6 +10,7 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <rocksdb/db.h>
 
+#include <atomic>
 #include <functional>
 
 #include "clients/meta/MetaClient.h"
@@ -51,14 +52,16 @@ class UpgraderSpace {
               const std::string& dstPath,
               const std::string& entry);
 
-  // Process v1 data and upgrade to v2 Ga
-  void doProcessV1();
+  // Process v1 data and upgrade to v2 Ga.
+  // Returns an error Status if any write/ingest failed; the space's data is
+  // left partially written and should be re-upgraded from scratch.
+  Status doProcessV1();
 
-  // Processing v2 Rc data upgrade to v2 Ga
-  void doProcessV2();
+  // Processing v2 Rc data upgrade to v2 Ga. See doProcessV1 for the error contract.
+  Status doProcessV2();
 
-  // Processing v2 Ga data upgrade to v3
-  void doProcessV3();
+  // Processing v2 Ga data upgrade to v3. See doProcessV1 for the error contract.
+  Status doProcessV3();
 
   // Perform manual compact
   void doCompaction();
@@ -129,10 +132,12 @@ class UpgraderSpace {
   void finishOnePart(PartitionID partId, const std::function<void()>& runner);
 
   // Copy system data (identified by `prefix`) verbatim from src to dst engine.
+  // On write failure sets spaceFailed_ and returns early.
   void handleSystemData(const std::string& prefix);
 
-  // multiPut `data` into the write engine, abort on failure, then clear it.
-  void writeBatch(PartitionID partId, std::vector<kvstore::KV>& data);
+  // multiPut `data` into the write engine, then clear it. On failure logs,
+  // sets spaceFailed_ and returns false (callers must stop processing).
+  bool writeBatch(PartitionID partId, std::vector<kvstore::KV>& data);
 
  public:
   // Source data path
@@ -182,6 +187,10 @@ class UpgraderSpace {
   folly::UnboundedBlockingQueue<PartitionID> partQueue_;
 
   std::atomic<size_t> unFinishedPart_;
+
+  // Set by any worker when a write/ingest fails. Once set, remaining parts of
+  // this space are drained without further work and doProcessVx returns error.
+  std::atomic<bool> spaceFailed_{false};
 
   std::mutex ingest_sst_file_mut_;
   std::vector<std::string> ingest_sst_file_;
