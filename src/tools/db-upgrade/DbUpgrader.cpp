@@ -237,12 +237,15 @@ void UpgraderSpace::finishOnePart(PartitionID partId, const std::function<void()
   }
 }
 
-void UpgraderSpace::writeBatch(PartitionID partId, std::vector<kvstore::KV>& data) {
+bool UpgraderSpace::writeBatch(PartitionID partId, std::vector<kvstore::KV>& data) {
   auto code = writeEngine_->multiPut(data);
-  if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-    LOG(FATAL) << "Write multi put in space id " << spaceId_ << " part id " << partId << " failed.";
-  }
   data.clear();
+  if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
+    LOG(ERROR) << "Write multi put in space id " << spaceId_ << " part id " << partId << " failed.";
+    spaceFailed_.store(true);
+    return false;
+  }
+  return true;
 }
 
 void UpgraderSpace::handleSystemData(const std::string& prefix) {
@@ -252,6 +255,7 @@ void UpgraderSpace::handleSystemData(const std::string& prefix) {
   if (retCode != nebula::cpp2::ErrorCode::SUCCEEDED) {
     LOG(ERROR) << "Space id " << spaceId_ << " get system data failed";
     LOG(ERROR) << "Handle system data in space id " << spaceId_ << " failed";
+    spaceFailed_.store(true);
     return;
   }
   std::vector<kvstore::KV> data;
@@ -261,18 +265,15 @@ void UpgraderSpace::handleSystemData(const std::string& prefix) {
     data.emplace_back(std::move(key), std::move(val));
     if (data.size() >= FLAGS_write_batch_num) {
       VLOG(2) << "Send system data total rows " << data.size();
-      auto code = writeEngine_->multiPut(data);
-      if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-        LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
+      if (!writeBatch(0, data)) {
+        return;
       }
-      data.clear();
     }
     iter->next();
   }
 
-  auto code = writeEngine_->multiPut(data);
-  if (code != nebula::cpp2::ErrorCode::SUCCEEDED) {
-    LOG(FATAL) << "Write multi put in space id " << spaceId_ << " failed.";
+  if (!writeBatch(0, data)) {
+    return;
   }
   LOG(INFO) << "Handle system data in space id " << spaceId_ << " success";
   LOG(INFO) << "Handle data in space id " << spaceId_ << " success";
@@ -282,6 +283,11 @@ void UpgraderSpace::runPartV1() {
   std::chrono::milliseconds take_dura{10};
   if (auto pId = partQueue_.try_take_for(take_dura)) {
     PartitionID partId = *pId;
+    if (spaceFailed_.load()) {
+      // Another part already failed; drain the queue without further work.
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV1, this));
+      return;
+    }
     // Handle vertex and edge, if there is an index, generate index data
     LOG(INFO) << "Start to handle vertex/edge/index data in space id " << spaceId_ << " part id "
               << partId;
@@ -397,13 +403,18 @@ void UpgraderSpace::runPartV1() {
 
       if (data.size() >= FLAGS_write_batch_num) {
         VLOG(2) << "Send record total rows " << data.size();
-        writeBatch(partId, data);
+        if (!writeBatch(partId, data)) {
+          break;
+        }
       }
 
       iter->next();
     }
 
-    writeBatch(partId, data);
+    if (spaceFailed_.load() || !writeBatch(partId, data)) {
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV1, this));
+      return;
+    }
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " finished";
     finishOnePart(partId, std::bind(&UpgraderSpace::runPartV1, this));
@@ -412,16 +423,28 @@ void UpgraderSpace::runPartV1() {
   }
 }
 
-void UpgraderSpace::doProcessV1() {
+Status UpgraderSpace::doProcessV1() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
   runConcurrentParts(std::bind(&UpgraderSpace::runPartV1, this));
+  if (spaceFailed_.load()) {
+    return Status::Error("Upgrade space %d failed when writing part data", spaceId_);
+  }
   handleSystemData(NebulaKeyUtilsV1::systemPrefix());
+  if (spaceFailed_.load()) {
+    return Status::Error("Upgrade space %d failed when writing system data", spaceId_);
+  }
+  return Status::OK();
 }
 
 void UpgraderSpace::runPartV2() {
   std::chrono::milliseconds take_dura{10};
   if (auto pId = partQueue_.try_take_for(take_dura)) {
     PartitionID partId = *pId;
+    if (spaceFailed_.load()) {
+      // Another part already failed; drain the queue without further work.
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV2, this));
+      return;
+    }
     // Handle vertex and edge, if there is an index, generate index data
     LOG(INFO) << "Start to handle vertex/edge/index data in space id " << spaceId_ << " part id "
               << partId;
@@ -532,13 +555,18 @@ void UpgraderSpace::runPartV2() {
 
       if (data.size() >= FLAGS_write_batch_num) {
         VLOG(2) << "Send record total rows " << data.size();
-        writeBatch(partId, data);
+        if (!writeBatch(partId, data)) {
+          break;
+        }
       }
 
       iter->next();
     }
 
-    writeBatch(partId, data);
+    if (spaceFailed_.load() || !writeBatch(partId, data)) {
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV2, this));
+      return;
+    }
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " succeed";
     finishOnePart(partId, std::bind(&UpgraderSpace::runPartV2, this));
@@ -547,10 +575,17 @@ void UpgraderSpace::runPartV2() {
   }
 }
 
-void UpgraderSpace::doProcessV2() {
+Status UpgraderSpace::doProcessV2() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
   runConcurrentParts(std::bind(&UpgraderSpace::runPartV2, this));
+  if (spaceFailed_.load()) {
+    return Status::Error("Upgrade space %d failed when writing part data", spaceId_);
+  }
   handleSystemData(NebulaKeyUtilsV2::systemPrefix());
+  if (spaceFailed_.load()) {
+    return Status::Error("Upgrade space %d failed when writing system data", spaceId_);
+  }
+  return Status::OK();
 }
 
 void UpgraderSpace::encodeVertexValue(PartitionID partId,
@@ -810,6 +845,11 @@ void UpgraderSpace::runPartV3() {
   std::chrono::milliseconds take_dura{10};
   if (auto pId = partQueue_.try_take_for(take_dura)) {
     PartitionID partId = *pId;
+    if (spaceFailed_.load()) {
+      // Another part already failed; drain the queue without further work.
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV3, this));
+      return;
+    }
     // Handle vertex and edge, if there is an index, generate index data
     LOG(INFO) << "Start to handle vertex/edge/index data in space id " << spaceId_ << " part id "
               << partId;
@@ -824,7 +864,8 @@ void UpgraderSpace::runPartV3() {
       return;
     }
     int64_t ingestFileCount = 0;
-    auto write_sst = [&, this](const std::vector<kvstore::KV>& data) {
+    // Returns false (and sets spaceFailed_) when the sst file can't be written.
+    auto write_sst = [&, this](const std::vector<kvstore::KV>& data) -> bool {
       ::rocksdb::Options option;
       option.create_if_missing = true;
       option.compression = ::rocksdb::CompressionType::kNoCompression;
@@ -836,23 +877,30 @@ void UpgraderSpace::runPartV3() {
                                        std::time(nullptr));
       ::rocksdb::Status s = sst_file_writer.Open(file);
       if (!s.ok()) {
-        LOG(FATAL) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
+        LOG(ERROR) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
                    << s.code();
+        spaceFailed_.store(true);
+        return false;
       }
       for (auto item : data) {
         s = sst_file_writer.Put(item.first, item.second);
         if (!s.ok()) {
-          LOG(FATAL) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
+          LOG(ERROR) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
                      << s.code();
+          spaceFailed_.store(true);
+          return false;
         }
       }
       s = sst_file_writer.Finish();
       if (!s.ok()) {
-        LOG(FATAL) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
+        LOG(ERROR) << "Failed to upgrade V3 of space " << spaceId_ << ", part " << partId << ":"
                    << s.code();
+        spaceFailed_.store(true);
+        return false;
       }
       std::lock_guard<std::mutex> lck(this->ingest_sst_file_mut_);
       ingest_sst_file_.push_back(file);
+      return true;
     };
     std::vector<kvstore::KV> data;
     std::string lastVertexKey = "";
@@ -865,14 +913,16 @@ void UpgraderSpace::runPartV3() {
       data.emplace_back(vertex, "");
       lastVertexKey = vertex;
       if (data.size() >= 100000) {
-        write_sst(data);
+        if (!write_sst(data)) {
+          break;
+        }
         data.clear();
       }
       iter->next();
     }
-    if (!data.empty()) {
-      write_sst(data);
-      data.clear();
+    if (spaceFailed_.load() || (!data.empty() && !write_sst(data))) {
+      finishOnePart(partId, std::bind(&UpgraderSpace::runPartV3, this));
+      return;
     }
     LOG(INFO) << "Handle vertex/edge/index data in space id " << spaceId_ << " part id " << partId
               << " succeed";
@@ -881,17 +931,23 @@ void UpgraderSpace::runPartV3() {
     LOG(INFO) << "Handle vertex/edge/index of parts data in space id " << spaceId_ << " finished";
   }
 }
-void UpgraderSpace::doProcessV3() {
+Status UpgraderSpace::doProcessV3() {
   LOG(INFO) << "Start to handle data in space id " << spaceId_;
   runConcurrentParts(std::bind(&UpgraderSpace::runPartV3, this));
+  if (spaceFailed_.load()) {
+    return Status::Error("Upgrade space %d failed when writing part data", spaceId_);
+  }
 
   if (ingest_sst_file_.size() != 0) {
     auto code = readEngine_->ingest(ingest_sst_file_, true);
     if (code != ::nebula::cpp2::ErrorCode::SUCCEEDED) {
-      LOG(FATAL) << "Failed to upgrade 2:3 when ingest sst file:" << static_cast<int>(code);
+      return Status::Error("Upgrade space %d failed when ingesting sst file, code %d",
+                           spaceId_,
+                           static_cast<int>(code));
     }
   }
   readEngine_->put(NebulaKeyUtils::dataVersionKey(), NebulaKeyUtilsV3::dataVersionValue());
+  return Status::OK();
 }
 std::vector<std::string> UpgraderSpace::indexVertexKeys(
     PartitionID partId,
@@ -990,7 +1046,8 @@ bool UpgraderSpace::copyWal() {
   }
   dstPath = fs::FileUtils::joinPath(dstPath, "wal");
   if (!fs::FileUtils::makeDir(dstPath)) {
-    LOG(FATAL) << "makeDir " << dstPath << " failed";
+    LOG(ERROR) << "makeDir " << dstPath << " failed";
+    return false;
   }
 
   auto partDirs = fs::FileUtils::listAllDirsInDir(srcPath.c_str());
@@ -1016,7 +1073,8 @@ bool UpgraderSpace::copyWal() {
           std::ios::binary | std::ios::in);
       auto dstwalpart = folly::stringPrintf("%s/%s", dstPath.c_str(), partDirs[i].c_str());
       if (!fs::FileUtils::makeDir(dstwalpart)) {
-        LOG(FATAL) << "makeDir " << dstwalpart << " failed";
+        LOG(ERROR) << "makeDir " << dstwalpart << " failed";
+        return false;
       }
       std::fstream destF(folly::stringPrintf("%s/%s", dstwalpart.c_str(), file.c_str()),
                          std::ios::binary | std::ios::out);
@@ -1107,25 +1165,33 @@ void DbUpgrader::doSpace() {
     LOG(INFO) << "Upgrade from path " << upgraderSpaceIter->srcPath_ << " space id "
               << upgraderSpaceIter->entry_ << " to path " << upgraderSpaceIter->dstPath_
               << " begin";
+    Status ret = Status::OK();
     if (FLAGS_upgrade_version == "1:2") {
-      upgraderSpaceIter->doProcessV1();
+      ret = upgraderSpaceIter->doProcessV1();
     } else if (FLAGS_upgrade_version == "2RC:2") {
-      upgraderSpaceIter->doProcessV2();
+      ret = upgraderSpaceIter->doProcessV2();
     } else if (FLAGS_upgrade_version == "2:3") {
-      upgraderSpaceIter->doProcessV3();
+      ret = upgraderSpaceIter->doProcessV3();
     } else {
-      LOG(FATAL) << "error upgrade version " << FLAGS_upgrade_version;
+      ret = Status::Error("error upgrade version %s", FLAGS_upgrade_version.c_str());
     }
 
-    auto ret = upgraderSpaceIter->copyWal();
-    if (!ret) {
-      LOG(ERROR) << "Copy space id " << upgraderSpaceIter->entry_ << " wal file failed";
+    if (!ret.ok()) {
+      // Isolate the failure to this space: leave its partial output in place and
+      // skip wal copy / compaction. The whole process keeps upgrading the rest.
+      LOG(ERROR) << "Upgrade space id " << upgraderSpaceIter->entry_ << " failed: " << ret
+                 << ". Skip wal copy and compaction for this space; its data must be re-upgraded.";
     } else {
-      LOG(INFO) << "Copy space id " << upgraderSpaceIter->entry_ << " wal file success";
-    }
+      auto walRet = upgraderSpaceIter->copyWal();
+      if (!walRet) {
+        LOG(ERROR) << "Copy space id " << upgraderSpaceIter->entry_ << " wal file failed";
+      } else {
+        LOG(INFO) << "Copy space id " << upgraderSpaceIter->entry_ << " wal file success";
+      }
 
-    if (FLAGS_compactions) {
-      upgraderSpaceIter->doCompaction();
+      if (FLAGS_compactions) {
+        upgraderSpaceIter->doCompaction();
+      }
     }
 
     auto unFinishedSpace = --unFinishedSpace_;
