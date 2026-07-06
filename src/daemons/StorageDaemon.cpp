@@ -12,6 +12,7 @@
 #include "common/network/NetworkUtils.h"
 #include "common/process/ProcessUtils.h"
 #include "common/time/TimezoneInfo.h"
+#include "daemons/DaemonInit.h"
 #include "daemons/SetupLogging.h"
 #include "storage/StorageServer.h"
 #include "storage/stats/StorageStats.h"
@@ -45,8 +46,6 @@ using nebula::Status;
 using nebula::StatusOr;
 using nebula::network::NetworkUtils;
 
-static void signalHandler(nebula::storage::StorageServer *storageServer, int sig);
-static Status setupSignalHandler(nebula::storage::StorageServer *storageServer);
 #if defined(ENABLE_BREAKPAD)
 extern Status setupBreakpad();
 #endif
@@ -60,13 +59,6 @@ int main(int argc, char *argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
 
   Status status;
-
-  auto pidPath = FLAGS_pid_file;
-  status = ProcessUtils::isPidAvailable(pidPath);
-  if (!status.ok()) {
-    LOG(ERROR) << status;
-    return EXIT_FAILURE;
-  }
 
   folly::init(&argc, &argv, true);
   if (FLAGS_enable_ssl || FLAGS_enable_meta_ssl) {
@@ -97,19 +89,11 @@ int main(int argc, char *argv[]) {
   // Init stats
   nebula::initStorageStats();
 
-  if (FLAGS_daemonize) {
-    status = ProcessUtils::daemonize(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
-  } else {
-    // Write the current pid into the pid file
-    status = ProcessUtils::makePidFile(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
+  auto pidPath = FLAGS_pid_file;
+  status = nebula::initDaemonProcess(pidPath, FLAGS_daemonize);
+  if (!status.ok()) {
+    LOG(ERROR) << status;
+    return EXIT_FAILURE;
   }
 
   if (FLAGS_data_path.empty()) {
@@ -155,7 +139,7 @@ int main(int argc, char *argv[]) {
   auto storageServer = std::make_unique<nebula::storage::StorageServer>(
       localhost, metaAddrsRet.value(), paths, FLAGS_wal_path, FLAGS_listener_path);
   // Setup the signal handlers
-  status = setupSignalHandler(storageServer.get());
+  status = nebula::setupSignalHandler(storageServer.get());
   if (!status.ok()) {
     LOG(ERROR) << status;
     return EXIT_FAILURE;
@@ -185,25 +169,4 @@ int main(int argc, char *argv[]) {
   storageServer->waitUntilStop();
   LOG(INFO) << "The storage Daemon stopped";
   return EXIT_SUCCESS;
-}
-
-Status setupSignalHandler(nebula::storage::StorageServer *storageServer) {
-  return nebula::SignalHandler::install(
-      {SIGINT, SIGTERM}, [storageServer](nebula::SignalHandler::GeneralSignalInfo *info) {
-        signalHandler(storageServer, info->sig());
-      });
-}
-
-void signalHandler(nebula::storage::StorageServer *storageServer, int sig) {
-  switch (sig) {
-    case SIGINT:
-    case SIGTERM:
-      FLOG_INFO("Signal %d(%s) received, stopping this server", sig, ::strsignal(sig));
-      if (storageServer) {
-        storageServer->notifyStop();
-      }
-      break;
-    default:
-      FLOG_ERROR("Signal %d(%s) received but ignored", sig, ::strsignal(sig));
-  }
 }
