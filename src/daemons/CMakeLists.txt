@@ -66,6 +66,7 @@ nebula_add_executable(
         nebula-storaged
     SOURCES
         StorageDaemon.cpp
+        DaemonInit.cpp
         SetupLogging.cpp
         SetupBreakpad.cpp
     OBJECTS
@@ -95,6 +96,7 @@ nebula_add_executable(
     SOURCES
         MetaDaemon.cpp
         MetaDaemonInit.cpp
+        DaemonInit.cpp
         SetupLogging.cpp
         SetupBreakpad.cpp
     OBJECTS
@@ -118,6 +120,7 @@ nebula_add_executable(
         nebula-graphd
     SOURCES
         GraphDaemon.cpp
+        DaemonInit.cpp
         SetupLogging.cpp
         SetupBreakpad.cpp
     OBJECTS
@@ -205,6 +208,7 @@ nebula_add_executable(
     SOURCES
         StandAloneDaemon.cpp
         MetaDaemonInit.cpp
+        DaemonInit.cpp
         SetupLogging.cpp
         SetupBreakpad.cpp
     OBJECTS

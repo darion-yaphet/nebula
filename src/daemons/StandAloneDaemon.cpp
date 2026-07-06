@@ -21,6 +21,7 @@
 #include "common/ssl/SSLConfig.h"
 #include "common/time/TimezoneInfo.h"
 #include "common/utils/MetaKeyUtils.h"
+#include "daemons/DaemonInit.h"
 #include "daemons/SetupLogging.h"
 #include "folly/ScopeGuard.h"
 #include "graph/service/GraphFlags.h"
@@ -124,11 +125,6 @@ int main(int argc, char *argv[]) {
 
   // Detect if the server has already been started
   auto pidPath = FLAGS_pid_file;
-  status = ProcessUtils::isPidAvailable(pidPath);
-  if (!status.ok()) {
-    LOG(ERROR) << status;
-    return EXIT_FAILURE;
-  }
 
   nebula::initGraphStats();
   nebula::initMetaStats();
@@ -140,19 +136,10 @@ int main(int argc, char *argv[]) {
     google::SetStderrLogging(google::INFO);
   }
 
-  if (FLAGS_daemonize) {
-    status = ProcessUtils::daemonize(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
-  } else {
-    // Write the current pid into the pid file
-    status = ProcessUtils::makePidFile(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
+  status = nebula::initDaemonProcess(pidPath, FLAGS_daemonize);
+  if (!status.ok()) {
+    LOG(ERROR) << status;
+    return EXIT_FAILURE;
   }
 
   // Validate the IPv4 address or hostname

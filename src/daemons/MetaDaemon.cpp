@@ -19,6 +19,7 @@
 #include "common/thread/GenericThreadPool.h"
 #include "common/time/TimezoneInfo.h"
 #include "common/utils/MetaKeyUtils.h"
+#include "daemons/DaemonInit.h"
 #include "daemons/SetupLogging.h"
 #include "kvstore/NebulaStore.h"
 #include "kvstore/PartManager.h"
@@ -51,9 +52,7 @@ DEFINE_bool(daemonize, true, "Whether run as a daemon process");
 
 static std::unique_ptr<nebula::kvstore::KVStore> gKVStore;
 
-static void signalHandler(apache::thrift::ThriftServer* metaServer, int sig);
 static void waitForStop();
-static Status setupSignalHandler(apache::thrift::ThriftServer* metaServer);
 #if defined(ENABLE_BREAKPAD)
 extern Status setupBreakpad();
 #endif
@@ -67,13 +66,6 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
 
   Status status;
-
-  auto pidPath = FLAGS_pid_file;
-  status = ProcessUtils::isPidAvailable(pidPath);
-  if (!status.ok()) {
-    LOG(ERROR) << status;
-    return EXIT_FAILURE;
-  }
 
   folly::init(&argc, &argv, true);
   if (FLAGS_enable_ssl || FLAGS_enable_meta_ssl) {
@@ -108,18 +100,11 @@ int main(int argc, char* argv[]) {
   // Init stats
   nebula::initMetaStats();
 
-  if (FLAGS_daemonize) {
-    status = ProcessUtils::daemonize(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
-  } else {
-    status = ProcessUtils::makePidFile(pidPath);
-    if (!status.ok()) {
-      LOG(ERROR) << status;
-      return EXIT_FAILURE;
-    }
+  auto pidPath = FLAGS_pid_file;
+  status = nebula::initDaemonProcess(pidPath, FLAGS_daemonize);
+  if (!status.ok()) {
+    LOG(ERROR) << status;
+    return EXIT_FAILURE;
   }
 
   std::string hostName;
@@ -167,7 +152,7 @@ int main(int argc, char* argv[]) {
 
   auto metaServer = std::make_unique<apache::thrift::ThriftServer>();
   // Setup the signal handlers
-  status = setupSignalHandler(metaServer.get());
+  status = nebula::setupSignalHandler(metaServer.get());
   if (!status.ok()) {
     LOG(ERROR) << status;
     return EXIT_FAILURE;
@@ -214,27 +199,6 @@ int main(int argc, char* argv[]) {
 
   LOG(INFO) << "The meta Daemon stopped";
   return EXIT_SUCCESS;
-}
-
-Status setupSignalHandler(apache::thrift::ThriftServer* metaServer) {
-  return nebula::SignalHandler::install(
-      {SIGINT, SIGTERM}, [metaServer](nebula::SignalHandler::GeneralSignalInfo* info) {
-        signalHandler(metaServer, info->sig());
-      });
-}
-
-void signalHandler(apache::thrift::ThriftServer* metaServer, int sig) {
-  switch (sig) {
-    case SIGINT:
-    case SIGTERM:
-      FLOG_INFO("Signal %d(%s) received, stopping this server", sig, ::strsignal(sig));
-      if (metaServer) {
-        metaServer->stop();
-      }
-      break;
-    default:
-      FLOG_ERROR("Signal %d(%s) received but ignored", sig, ::strsignal(sig));
-  }
 }
 
 void waitForStop() {
