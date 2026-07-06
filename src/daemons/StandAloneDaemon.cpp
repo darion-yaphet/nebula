@@ -281,7 +281,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (FLAGS_num_netio_threads == 0) {
-      FLAGS_num_netio_threads = std::thread::hardware_concurrency();
+      auto hwThreads = std::thread::hardware_concurrency();
+      FLAGS_num_netio_threads = hwThreads > 0 ? hwThreads : 1;
     }
     if (FLAGS_num_netio_threads <= 0) {
       LOG(WARNING) << "Number of networking IO threads should be greater than zero";
@@ -290,7 +291,8 @@ int main(int argc, char *argv[]) {
     LOG(INFO) << "Number of networking IO threads: " << FLAGS_num_netio_threads;
 
     if (FLAGS_num_worker_threads == 0) {
-      FLAGS_num_worker_threads = std::thread::hardware_concurrency();
+      auto hwThreads = std::thread::hardware_concurrency();
+      FLAGS_num_worker_threads = hwThreads > 0 ? hwThreads : 1;
     }
     if (FLAGS_num_worker_threads <= 0) {
       LOG(WARNING) << "Number of worker threads should be greater than zero";
