@@ -208,6 +208,9 @@ void QueryInstance::onError(Status status) {
   addSlowQueryStats(latency, spaceName);
   rctx->session()->deleteQuery(qctx_.get());
   rctx->finish();
+  // Other executors may still have asynchronous callbacks after the scheduler
+  // reports the first failure. Keep the query context alive until they exit.
+  scheduler_->waitFinish();
   delete this;
 }
 
