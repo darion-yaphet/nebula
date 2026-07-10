@@ -1094,7 +1094,14 @@ void RaftPart::processAppendLogResponses(const AppendLogResponses& resps,
               [self = shared_from_this(), term = term_] { self->onLeaderReady(term); });
         }
       } else {
-        LOG(FATAL) << idStr_ << "Failed to commit logs";
+        LOG(ERROR) << idStr_ << "Failed to commit logs " << committedId + 1 << " to "
+                   << lastLogId << ": " << apache::thrift::util::enumNameSafe(code);
+        auto result = code == nebula::cpp2::ErrorCode::E_WRITE_STALLED
+                          ? code
+                          : nebula::cpp2::ErrorCode::E_RAFT_WAL_FAIL;
+        iter.commit(result);
+        checkAppendLogResult(result);
+        return;
       }
       VLOG(4) << idStr_ << "Leader succeeded in committing the logs " << committedId + 1 << " to "
               << lastLogId;

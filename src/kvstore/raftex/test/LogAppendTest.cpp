@@ -63,6 +63,32 @@ TEST(LogAppend, SimpleAppendWithThreeCopies) {
   finishRaft(services, copies, workers, leader);
 }
 
+TEST(LogAppend, CommitFailureDoesNotStopLeader) {
+  fs::TempDir walRoot("/tmp/commit_failure_does_not_stop_leader.XXXXXX");
+  std::shared_ptr<thread::GenericThreadPool> workers;
+  std::vector<std::string> wals;
+  std::vector<HostAddr> allHosts;
+  std::vector<std::shared_ptr<RaftexService>> services;
+  std::vector<std::shared_ptr<test::TestShard>> copies;
+
+  std::shared_ptr<test::TestShard> leader;
+  setupRaft(1, walRoot, workers, wals, allHosts, services, copies, leader);
+  checkLeadership(copies, leader);
+
+  leader->failNextCommit();
+  auto failed = leader->appendAsync(0, "commit failure");
+  ASSERT_EQ(nebula::cpp2::ErrorCode::E_RAFT_WAL_FAIL, std::move(failed).get());
+  ASSERT_TRUE(leader->isRunning());
+
+  auto recovered = leader->appendAsync(0, "commit recovery");
+  ASSERT_EQ(nebula::cpp2::ErrorCode::SUCCEEDED, std::move(recovered).get());
+
+  std::vector<std::string> msgs{"commit failure", "commit recovery"};
+  checkConsensus(copies, 0, 1, msgs);
+
+  finishRaft(services, copies, workers, leader);
+}
+
 TEST(LogAppend, MultiThreadAppend) {
   fs::TempDir walRoot("/tmp/multi_thread_append.XXXXXX");
   std::shared_ptr<thread::GenericThreadPool> workers;
