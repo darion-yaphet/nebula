@@ -1096,9 +1096,11 @@ void RaftPart::processAppendLogResponses(const AppendLogResponses& resps,
       } else {
         LOG(ERROR) << idStr_ << "Failed to commit logs " << committedId + 1 << " to "
                    << lastLogId << ": " << apache::thrift::util::enumNameSafe(code);
-        auto result = code == nebula::cpp2::ErrorCode::E_WRITE_STALLED
-                          ? code
-                          : nebula::cpp2::ErrorCode::E_RAFT_WAL_FAIL;
+        // The batch is already durable on a quorum, but a local state-machine
+        // failure leaves committedLogId_ unchanged so the next append retries it.
+        // Do not report a definite failure to callers that might retry a
+        // non-idempotent mutation.
+        auto result = nebula::cpp2::ErrorCode::E_RAFT_UNKNOWN_APPEND_LOG;
         iter.commit(result);
         checkAppendLogResult(result);
         return;
