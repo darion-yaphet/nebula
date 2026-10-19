@@ -77,7 +77,7 @@ TEST(LogAppend, CommitFailureDoesNotStopLeader) {
 
   leader->failNextCommit();
   auto failed = leader->appendAsync(0, "commit failure");
-  ASSERT_EQ(nebula::cpp2::ErrorCode::E_RAFT_WAL_FAIL, std::move(failed).get());
+  ASSERT_EQ(nebula::cpp2::ErrorCode::E_RAFT_UNKNOWN_APPEND_LOG, std::move(failed).get());
   ASSERT_TRUE(leader->isRunning());
 
   auto recovered = leader->appendAsync(0, "commit recovery");
