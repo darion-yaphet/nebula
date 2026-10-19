@@ -168,6 +168,9 @@ void TestShard::onLeaderReady(TermID term) {
 std::tuple<nebula::cpp2::ErrorCode, LogID, TermID> TestShard::commitLogs(
     std::unique_ptr<LogIterator> iter, bool wait, bool needLock) {
   UNUSED(wait);
+  if (failNextCommit_.exchange(false)) {
+    return {nebula::cpp2::ErrorCode::E_UNKNOWN, kNoCommitLogId, kNoCommitLogTerm};
+  }
   LogID lastId = kNoCommitLogId;
   // LOG(INFO) << "TestShard::commitLogs() lastId = " << lastId;
   TermID lastTerm = kNoCommitLogTerm;

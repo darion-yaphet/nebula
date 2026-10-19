@@ -127,6 +127,9 @@ class TestShard : public RaftPart {
 
   size_t getNumLogs() const;
   bool getLogMsg(size_t index, folly::StringPiece& msg);
+  void failNextCommit() {
+    failNextCommit_.store(true);
+  }
 
  public:
   int32_t commitTimes_ = 0;
@@ -138,6 +141,7 @@ class TestShard : public RaftPart {
 
   std::vector<std::pair<LogID, std::string>> data_;
   LogID lastCommittedLogId_ = 0L;
+  std::atomic_bool failNextCommit_{false};
   mutable folly::RWSpinLock lock_;
 
   std::function<void(size_t idx, const char*, TermID)> leadershipLostCB_;
