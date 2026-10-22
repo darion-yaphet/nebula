@@ -26,7 +26,8 @@ Configure each daemon that needs authenticated management access:
 ```
 
 The file must contain one 32-256 character bearer token, with an optional final
-LF or CRLF. It must be a regular file with no group/other permissions (for
+LF or CRLF. It must be owned by the daemon's effective user and be a regular
+file with no group/other permissions (for
 example mode `0600` or `0400`). A missing, unreadable, empty, malformed or
 insecurely permissioned configured file prevents HTTP startup.
 The token is loaded once at startup;

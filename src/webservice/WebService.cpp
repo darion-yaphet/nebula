@@ -121,8 +121,10 @@ Status WebService::start(uint16_t httpPort) {
     }
     std::unique_ptr<FILE, decltype(&std::fclose)> input(stream, &std::fclose);
     struct stat info;
-    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & 0077) != 0) {
-      return Status::Error("Management HTTP token must be a regular file with private permissions");
+    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid() ||
+        (info.st_mode & 0077) != 0) {
+      return Status::Error(
+          "Management HTTP token must be a private regular file owned by the effective user");
     }
     // Bound the read, including an optional final LF or CRLF.
     token.resize(259);

@@ -75,6 +75,8 @@ int main() {
                            "udf_path",
                            "failed_login_attempts",
                            "password_lock_time_in_secs",
+                           "enable_client_white_list",
+                           "client_white_list",
                            "v\n",
                            "--v",
                            "v/../ws_ip"}) {

@@ -6,6 +6,7 @@
 #include <folly/json.h>
 #include <gtest/gtest.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <fstream>
@@ -225,6 +226,24 @@ TEST(FlagsAccessTest, InsecureTokenFilePermissionsPreventStartup) {
   EXPECT_FALSE(service.start(0).ok());
 }
 
+TEST(FlagsAccessTest, DifferentTokenFileOwnerPreventsStartup) {
+  if (::geteuid() != 0) {
+    GTEST_SKIP() << "Changing a token file to a different owner requires root";
+  }
+  gflags::FlagSaver saver;
+  FLAGS_ws_http_port = 0;
+  fs::TempFile tokenFile("/tmp/nebula-other-owner-http-token.XXXXXX");
+  {
+    std::ofstream out(tokenFile.path());
+    out << kHttpAuthTestToken << '\n';
+  }
+  ASSERT_EQ(0, ::chown(tokenFile.path(), 1, static_cast<gid_t>(-1)));
+  FLAGS_ws_http_token_file = tokenFile.path();
+
+  WebService service;
+  EXPECT_FALSE(service.start(0).ok());
+}
+
 TEST(FlagsAccessTest, GetSetTest) {
   std::string resp;
   ASSERT_TRUE(getUrl("/flags?flags=int32_test", resp));
@@ -278,6 +297,14 @@ TEST(FlagsAccessTest, SetFlagsRejectsSecurityChangesBeforeWriting) {
   auto authFlag = putRaw(R"({"enable_authorize":true})");
   ASSERT_EQ(CURLE_OK, authFlag.curlCode);
   EXPECT_TRUE(hasHttpStatus(authFlag, 403)) << authFlag.header;
+
+  for (const auto* body : {R"({"int32_test":123,"enable_client_white_list":false})",
+                           R"({"int32_test":123,"client_white_list":"other"})"}) {
+    auto response = putRaw(body);
+    ASSERT_EQ(CURLE_OK, response.curlCode);
+    EXPECT_TRUE(hasHttpStatus(response, 403)) << response.header;
+    EXPECT_EQ(original, FLAGS_int32_test);
+  }
 }
 
 TEST(FlagsAccessTest, SetFlagsAcceptsScalarValues) {
