@@ -999,6 +999,42 @@ TEST(MetaClientTest, EdgeIndexTest) {
   cluster.stop();
 }
 
+TEST(MetaClientTest, FTIndexByNameFromCacheTest) {
+  auto threadPool = std::make_shared<folly::IOThreadPoolExecutor>(1);
+  MetaClient client(threadPool, std::vector<HostAddr>{{"127.0.0.1", 9559}});
+  const GraphSpaceID spaceId = 1;
+  const std::string indexName = "fulltext_index";
+
+  auto result = client.getFTIndexByNameFromCache(spaceId, indexName);
+  ASSERT_FALSE(result.ok());
+
+  client.ready_ = true;
+  result = client.getFTIndexByNameFromCache(spaceId, indexName);
+  ASSERT_FALSE(result.ok());
+  EXPECT_TRUE(result.status().isIndexNotFound());
+
+  cpp2::FTIndex index;
+  index.space_id_ref() = spaceId;
+  nebula::cpp2::SchemaID schemaId;
+  schemaId.tag_id_ref() = 1;
+  index.depend_schema_ref() = std::move(schemaId);
+  index.fields_ref() = {"name"};
+  index.analyzer_ref() = "standard";
+  client.metadata_.load()->fulltextIndexMap_.emplace(indexName, index);
+
+  result = client.getFTIndexByNameFromCache(spaceId, "missing_index");
+  ASSERT_FALSE(result.ok());
+  EXPECT_TRUE(result.status().isIndexNotFound());
+
+  result = client.getFTIndexByNameFromCache(spaceId + 1, indexName);
+  ASSERT_FALSE(result.ok());
+  EXPECT_TRUE(result.status().isIndexNotFound());
+
+  result = client.getFTIndexByNameFromCache(spaceId, indexName);
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_EQ(index, result.value());
+}
+
 TEST(MetaClientTest, FTServiceTest) {
   FLAGS_heartbeat_interval_secs = 1;
   fs::TempDir rootPath("/tmp/FTServiceTest.XXXXXX");

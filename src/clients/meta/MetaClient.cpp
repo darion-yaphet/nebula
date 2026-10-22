@@ -3667,11 +3667,11 @@ StatusOr<cpp2::FTIndex> MetaClient::getFTIndexByNameFromCache(GraphSpaceID space
   }
   folly::rcu_reader guard;
   const auto& metadata = *metadata_.load();
-  if (metadata.fulltextIndexMap_.find(name) != fulltextIndexMap_.end() &&
-      metadata.fulltextIndexMap_.at(name).get_space_id() != spaceId) {
+  auto iter = metadata.fulltextIndexMap_.find(name);
+  if (iter == metadata.fulltextIndexMap_.end() || iter->second.get_space_id() != spaceId) {
     return Status::IndexNotFound();
   }
-  return metadata.fulltextIndexMap_.at(name);
+  return iter->second;
 }
 
 folly::Future<StatusOr<cpp2::CreateSessionResp>> MetaClient::createSession(
