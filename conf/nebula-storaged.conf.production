@@ -38,6 +38,9 @@
 --ws_ip=0.0.0.0
 # HTTP service port
 --ws_http_port=19779
+# Empty preserves anonymous management HTTP access; set a token file to require authentication.
+# See docs/management-http.md. Use a private network or TLS proxy.
+--ws_http_token_file=
 # heartbeat with meta service
 --heartbeat_interval_secs=10
 

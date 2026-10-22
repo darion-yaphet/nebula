@@ -73,6 +73,9 @@
 --ws_ip=0.0.0.0
 # HTTP service port
 --ws_http_port=19669
+# Empty preserves anonymous management HTTP access; set a token file to require authentication.
+# See docs/management-http.md. Use a private network or TLS proxy.
+--ws_http_token_file=
 # storage client timeout
 --storage_client_timeout_ms=60000
 # slow query threshold in us

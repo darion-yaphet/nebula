@@ -11,6 +11,7 @@
 DECLARE_int32(ws_http_port);
 DECLARE_string(ws_ip);
 DECLARE_int32(ws_threads);
+DECLARE_string(ws_http_token_file);
 
 #ifdef BUILD_STANDALONE
 DECLARE_int32(ws_storage_http_port);

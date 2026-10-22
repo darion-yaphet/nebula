@@ -102,6 +102,18 @@ proxygen::RequestHandler *Route::generateHandler(const std::string &path) const 
   return generator_(std::move(params));
 }
 
+bool Router::isPublic(const proxygen::HTTPMessage *msg) const {
+  for (Route *r = head_; r != nullptr; r = r->next()) {
+    if (!msg->getMethod()) {
+      break;
+    }
+    if (r->matches(msg->getMethod().value(), msg->getPath())) {
+      return r->isPublic();
+    }
+  }
+  return false;
+}
+
 proxygen::RequestHandler *Router::dispatch(const proxygen::HTTPMessage *msg) const {
   for (Route *r = head_; r != nullptr; r = r->next()) {
     if (!msg->getMethod()) {

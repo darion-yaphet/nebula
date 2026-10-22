@@ -4,6 +4,13 @@
 
 nebula_add_test(
     NAME
+        http_access_control_test
+    SOURCES
+        HttpAccessControlTest.cpp
+)
+
+nebula_add_test(
+    NAME
         flags_access_test
     SOURCES
         FlagsAccessTest.cpp
