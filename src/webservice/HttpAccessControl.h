@@ -65,7 +65,9 @@ class HttpAccessControl final {
                                                                   "enable_udf",
                                                                   "udf_path",
                                                                   "failed_login_attempts",
-                                                                  "password_lock_time_in_secs"};
+                                                                  "password_lock_time_in_secs",
+                                                                  "enable_client_white_list",
+                                                                  "client_white_list"};
     return securityFlags.count(name) == 0;
   }
 
