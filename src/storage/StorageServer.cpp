@@ -134,7 +134,7 @@ bool StorageServer::initWebService() {
   router.get("/admin").handler([this](web::PathParams&&) {
     return new storage::StorageHttpAdminHandler(schemaMan_.get(), kvstore_.get());
   });
-  router.get("/rocksdb_stats").handler([](web::PathParams&&) {
+  router.get("/rocksdb_stats").publicHandler([](web::PathParams&&) {
     return new storage::StorageHttpStatsHandler();
   });
   router.get("/rocksdb_property").handler([this](web::PathParams&&) {

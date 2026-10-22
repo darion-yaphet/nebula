@@ -24,6 +24,7 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   void SetUp() override {
     FLAGS_ws_ip = "127.0.0.1";
     FLAGS_ws_http_port = 0;
+    authGuard_ = std::make_unique<HttpAuthTestGuard>();
     FLAGS_enable_rocksdb_statistics = true;
     rootPath_ = std::make_unique<fs::TempDir>("/tmp/StorageHttpPropertyHandler.XXXXXX");
     cluster_ = std::make_unique<mock::MockCluster>();
@@ -41,8 +42,9 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   }
 
   void TearDown() override {
-    cluster_.reset();
     webSvc_.reset();
+    authGuard_.reset();
+    cluster_.reset();
     rootPath_.reset();
     VLOG(1) << "Web service stopped";
   }
@@ -51,12 +53,13 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   std::unique_ptr<mock::MockCluster> cluster_;
   std::unique_ptr<WebService> webSvc_;
   std::unique_ptr<fs::TempDir> rootPath_;
+  std::unique_ptr<HttpAuthTestGuard> authGuard_;
 };
 
 static std::string request(const std::string& url) {
   auto request =
       folly::stringPrintf("http://%s:%d%s", FLAGS_ws_ip.c_str(), FLAGS_ws_http_port, url.c_str());
-  auto resp = HttpClient::instance().get(request);
+  auto resp = HttpClient::instance().get(request, httpAuthHeaders());
   EXPECT_EQ(resp.curlCode, 0);
   return resp.body;
 }
@@ -83,7 +86,9 @@ TEST(StorageHttpPropertyHandlerTest, ValidRequest) {
 ])";
     EXPECT_EQ(expect, request("/rocksdb_property?space=1&property=rocksdb.is-write-stopped"));
   }
-  { EXPECT_TRUE(!request("/rocksdb_property?space=1").empty()); }
+  {
+    EXPECT_TRUE(!request("/rocksdb_property?space=1").empty());
+  }
 }
 
 }  // namespace storage

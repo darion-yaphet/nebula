@@ -10,12 +10,14 @@
 
 #include "common/base/Base.h"
 #include "webservice/Common.h"
+#include "webservice/HttpAccessControl.h"
 
 namespace nebula {
 
 class SetFlagsHandler : public proxygen::RequestHandler {
  public:
-  SetFlagsHandler() = default;
+  explicit SetFlagsHandler(std::shared_ptr<const HttpAccessControl> access)
+      : access_(std::move(access)) {}
 
   void onRequest(std::unique_ptr<proxygen::HTTPMessage> headers) noexcept override;
 
@@ -30,8 +32,10 @@ class SetFlagsHandler : public proxygen::RequestHandler {
   void onError(proxygen::ProxygenError err) noexcept override;
 
  private:
+  const std::shared_ptr<const HttpAccessControl> access_;
   HttpCode err_{HttpCode::SUCCEEDED};
   std::unique_ptr<folly::IOBuf> body_;
+  size_t bodySize_{0};
 };
 
 }  // namespace nebula

@@ -24,6 +24,7 @@ class StorageHttpAdminHandlerTestEnv : public ::testing::Environment {
   void SetUp() override {
     FLAGS_ws_ip = "127.0.0.1";
     FLAGS_ws_http_port = 0;
+    authGuard_ = std::make_unique<HttpAuthTestGuard>();
     rootPath_ = std::make_unique<fs::TempDir>("/tmp/StorageHttpAdminHandler.XXXXXX");
     cluster_ = std::make_unique<mock::MockCluster>();
     cluster_->initStorageKV(rootPath_->path());
@@ -40,8 +41,9 @@ class StorageHttpAdminHandlerTestEnv : public ::testing::Environment {
   }
 
   void TearDown() override {
-    cluster_.reset();
     webSvc_.reset();
+    authGuard_.reset();
+    cluster_.reset();
     rootPath_.reset();
     VLOG(1) << "Web service stopped";
   }
@@ -50,12 +52,13 @@ class StorageHttpAdminHandlerTestEnv : public ::testing::Environment {
   std::unique_ptr<mock::MockCluster> cluster_{nullptr};
   std::unique_ptr<WebService> webSvc_{nullptr};
   std::unique_ptr<fs::TempDir> rootPath_{nullptr};
+  std::unique_ptr<HttpAuthTestGuard> authGuard_;
 };
 
 static std::string request(const std::string& url) {
   auto request =
       folly::stringPrintf("http://%s:%d%s", FLAGS_ws_ip.c_str(), FLAGS_ws_http_port, url.c_str());
-  auto resp = HttpClient::instance().get(request);
+  auto resp = HttpClient::instance().get(request, httpAuthHeaders());
   EXPECT_EQ(resp.curlCode, 0);
   return resp.body;
 }
@@ -69,6 +72,13 @@ TEST(StorageHttpAdminHandlerTest, TestInvalidRequests) {
   checkInvalidRequest("/admin?space=xx", "Op should not be empty");
   checkInvalidRequest("/admin?space=xx&op=yy", "Can't find space xx");
   checkInvalidRequest("/admin?space=1&op=yy", "Unknown operation yy");
+}
+
+TEST(StorageHttpAdminHandlerTest, AuthenticationRunsBeforeRouteDispatch) {
+  auto response = HttpClient::instance().get(webServiceUrl("/admin?space=1&op=flush"));
+  ASSERT_EQ(CURLE_OK, response.curlCode);
+  EXPECT_TRUE(hasHttpStatus(response, 401)) << response.header;
+  EXPECT_NE(std::string::npos, response.header.find("WWW-Authenticate: Bearer"));
 }
 
 TEST(StorageHttpAdminHandlerTest, TestSupportedOperations) {
