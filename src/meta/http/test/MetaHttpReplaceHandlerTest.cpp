@@ -9,12 +9,12 @@
 #include "common/base/Base.h"
 #include "common/fs/TempDir.h"
 #include "common/network/NetworkUtils.h"
-#include "common/process/ProcessUtils.h"
 #include "common/thread/GenericThreadPool.h"
 #include "meta/http/MetaHttpReplaceHostHandler.h"
 #include "meta/test/TestUtils.h"
 #include "webservice/Router.h"
 #include "webservice/WebService.h"
+#include "webservice/test/TestUtils.h"
 
 namespace nebula {
 namespace meta {
@@ -28,6 +28,7 @@ class MetaHttpReplaceHandlerTestEnv : public ::testing::Environment {
  public:
   void SetUp() override {
     FLAGS_ws_http_port = 0;
+    authGuard_ = std::make_unique<HttpAuthTestGuard>();
     LOG(INFO) << "Starting web service...";
     rootPath_ = std::make_unique<fs::TempDir>("/tmp/MetaHttpReplaceHandler.XXXXXX");
     kv_ = MockCluster::initMetaKV(rootPath_->path());
@@ -60,9 +61,10 @@ class MetaHttpReplaceHandlerTestEnv : public ::testing::Environment {
   }
 
   void TearDown() override {
+    webSvc_.reset();
+    authGuard_.reset();
     kv_.reset();
     rootPath_.reset();
-    webSvc_.reset();
 
     gHandler = nullptr;
     gKVStore = nullptr;
@@ -74,11 +76,15 @@ class MetaHttpReplaceHandlerTestEnv : public ::testing::Environment {
   std::unique_ptr<WebService> webSvc_;
   std::unique_ptr<fs::TempDir> rootPath_;
   std::unique_ptr<kvstore::KVStore> kv_;
+  std::unique_ptr<HttpAuthTestGuard> authGuard_;
 };
 
 StatusOr<std::string> silentCurl(const std::string& path) {
-  auto command = folly::stringPrintf("/usr/bin/curl -Gs \"%s\"", path.c_str());
-  return nebula::ProcessUtils::runCommand(command.c_str());
+  auto response = HttpClient::instance().get(path, httpAuthHeaders());
+  if (response.curlCode != CURLE_OK) {
+    return Status::Error("curl error(%d): %s", response.curlCode, response.curlMessage.c_str());
+  }
+  return response.body;
 }
 
 TEST(MetaHttpReplaceHandlerTest, FooTest) {

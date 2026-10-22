@@ -11,6 +11,7 @@
 #include <memory>
 #include <regex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "common/base/Logging.h"
@@ -50,6 +51,16 @@ class Route final {
   // Register a handler generator for the route
   void handler(ReqHandlerGenerator generator);
 
+  // Public access belongs to the matched route, not just its requested URL.
+  void publicHandler(ReqHandlerGenerator generator) {
+    public_ = true;
+    handler(std::move(generator));
+  }
+
+  bool isPublic() const {
+    return public_;
+  }
+
   proxygen::RequestHandler *generateHandler(const std::string &path) const;
 
  private:
@@ -64,6 +75,7 @@ class Route final {
   std::string path_;
   std::unique_ptr<std::regex> pattern_;
   ReqHandlerGenerator generator_;
+  bool public_{false};
   std::vector<std::string> groups_;
 };
 
@@ -75,6 +87,8 @@ class Router final : public boost::noncopyable, public cpp::NonMovable {
   ~Router();
 
   proxygen::RequestHandler *dispatch(const proxygen::HTTPMessage *msg) const;
+
+  bool isPublic(const proxygen::HTTPMessage *msg) const;
 
   Route &get(const std::string &path) {
     return route(proxygen::HTTPMethod::GET, path);

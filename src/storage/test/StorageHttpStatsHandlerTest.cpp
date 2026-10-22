@@ -24,6 +24,7 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   void SetUp() override {
     FLAGS_ws_ip = "127.0.0.1";
     FLAGS_ws_http_port = 0;
+    authGuard_ = std::make_unique<HttpAuthTestGuard>();
     FLAGS_enable_rocksdb_statistics = true;
     rootPath_ = std::make_unique<fs::TempDir>("/tmp/StorageHttpStatsHandler.XXXXXX");
     cluster_ = std::make_unique<mock::MockCluster>();
@@ -32,7 +33,7 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
     VLOG(1) << "Starting web service...";
     webSvc_ = std::make_unique<WebService>();
     auto& router = webSvc_->router();
-    router.get("/rocksdb_stats").handler([](nebula::web::PathParams&&) {
+    router.get("/rocksdb_stats").publicHandler([](nebula::web::PathParams&&) {
       return new storage::StorageHttpStatsHandler();
     });
     auto status = webSvc_->start();
@@ -40,8 +41,9 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   }
 
   void TearDown() override {
-    cluster_.reset();
     webSvc_.reset();
+    authGuard_.reset();
+    cluster_.reset();
     rootPath_.reset();
     VLOG(1) << "Web service stopped";
   }
@@ -50,6 +52,7 @@ class StorageHttpStatsHandlerTestEnv : public ::testing::Environment {
   std::unique_ptr<mock::MockCluster> cluster_;
   std::unique_ptr<WebService> webSvc_;
   std::unique_ptr<fs::TempDir> rootPath_;
+  std::unique_ptr<HttpAuthTestGuard> authGuard_;
 };
 
 TEST(StorageHttpStatsHandlerTest, GetStatsTest) {
